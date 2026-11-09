@@ -1,0 +1,325 @@
+(function () {
+  'use strict';
+  var CFG = window.PROSTACK_CONFIG, E = window.Engine;
+  var sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey);
+  var app = document.getElementById('app'), nav = document.getElementById('nav');
+  var S = { user: null, tab: 'plan', cards: [], profile: null, credit: null, apps: [], repay: null, consents: [], form: null, flash: null };
+  var CONSENTS = [
+    ['terms', 'I agree to the terms of use and understand ProStack is a planning tool that does not apply for credit on my behalf or guarantee approval.'],
+    ['credit_data', 'I agree to store the credit ranges and counts I enter here (never my SSN, full report, or card numbers) so ProStack can build my plan.'],
+    ['estimates_notice', 'I understand odds, dates and card terms are estimates from public sources and may be wrong or out of date.'],
+    ['affiliate_disclosure', 'I understand ProStack may earn referral fees from some issuers if I apply through a ProStack link. Any such link will be marked.']
+  ];
+  var SCORES = [[760, '760 and above'], [720, '720 to 759'], [680, '680 to 719'], [640, '640 to 679'], [600, 'Below 640']];
+  var BIZ = [['none', 'Not started yet'], ['under6', 'Under 6 months'], ['6to24', '6 to 24 months'], ['over24', 'Over 24 months']];
+  var GOALS = [['financing', '0% financing (working capital)'], ['cashback', 'Cash back'], ['travel', 'Travel rewards']];
+  var STATUSES = ['planned', 'applied', 'approved', 'denied', 'withdrawn'];
+
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function today() { return new Date().toISOString().slice(0, 10); }
+  function fmt(d) { return new Date(d.length === 10 ? d + 'T00:00:00' : d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); }
+  function money(n) { return '$' + Math.round(n).toLocaleString('en-US'); }
+  function opts(list, sel) { return list.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (String(o[0]) === String(sel) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join(''); }
+  function flash(type, text) { S.flash = { type: type, text: text }; }
+  function flashHtml() { var f = S.flash; S.flash = null; return f ? '<div class="msg ' + f.type + '" role="status">' + esc(f.text) + '</div>' : ''; }
+  function cardById(id) { return S.cards.filter(function (c) { return c.id === id; })[0]; }
+  function cardName(id) { var c = cardById(id); return c ? c.issuer + ' ' + c.name : id; }
+  function feeText(c) { return c.fee == null ? 'Unconfirmed' : (c.fee === 0 ? '$0' : '$' + c.fee); }
+  function introText(c) { return c.intro == null ? 'Unconfirmed' : c.intro === 0 ? 'None' : c.intro + ' mo' + (c.introVerify ? ' (verify)' : ''); }
+
+  /* ---------- data ---------- */
+  function fail(err) { flash('err', (err && err.message) || 'Something went wrong. Please try again.'); }
+  function loadAll() {
+    var uid = S.user.id;
+    return Promise.all([
+      sb.from('cards').select('*').eq('is_active', true).order('issuer').order('name'),
+      sb.from('profiles').select('*').eq('id', uid).maybeSingle(),
+      sb.from('credit_profiles').select('*').eq('user_id', uid).maybeSingle(),
+      sb.from('applications').select('*').order('created_at', { ascending: true }),
+      sb.from('repayment_plans').select('*').order('created_at', { ascending: false }).limit(1),
+      sb.from('consents').select('*')
+    ]).then(function (r) {
+      for (var i = 0; i < r.length; i++) if (r[i].error) throw r[i].error;
+      S.cards = (r[0].data || []).map(E.fromRow);
+      S.profile = r[1].data; S.credit = r[2].data; S.apps = r[3].data || [];
+      S.repay = (r[4].data || [])[0] || null; S.consents = r[5].data || [];
+    });
+  }
+  function hasAllConsents() {
+    var have = {}; S.consents.forEach(function (c) { if (c.version === CFG.consentVersion) have[c.consent_type] = 1; });
+    return CONSENTS.every(function (c) { return have[c[0]]; });
+  }
+  function formFromState() {
+    var c = S.credit || {}, p = S.profile || {};
+    return {
+      score: c.score_band || 720, new24: c.new_accounts_24m != null ? c.new_accounts_24m : 0,
+      amexHeld: c.amex_credit_held || 0, amex90: c.amex_opened_90d || 0,
+      relBofa: !!c.rel_bofa, relUsb: !!c.rel_usb, goal: c.goal || 'financing',
+      biz: S.credit ? E.bizFromDate(p.business_started_on) : '6to24', plan: 3,
+      business_name: p.business_name || '', full_name: p.full_name || ''
+    };
+  }
+  function profileForEngine() {
+    var f = S.form;
+    return { score: +f.score, new24: +f.new24 || 0, amexHeld: +f.amexHeld || 0, amex90: +f.amex90 || 0, biz: f.biz, goal: f.goal, relBofa: !!f.relBofa, relUsb: !!f.relUsb, plan: +f.plan || 3 };
+  }
+
+  /* ---------- auth screens ---------- */
+  function renderAuth(mode) {
+    nav.hidden = true;
+    var signup = mode === 'signup';
+    app.innerHTML = '<div class="panel auth"><h2>' + (signup ? 'Create your account' : 'Sign in') + '</h2>' +
+      '<p class="sub">' + (signup ? 'Build a card plan for your business and track every application in one place.' : 'Welcome back.') + '</p>' + flashHtml() +
+      '<form id="authForm"><div class="field"><label for="em">Email</label><input id="em" type="email" autocomplete="email" required></div>' +
+      '<div class="field"><label for="pw">Password' + (signup ? ' (at least 8 characters)' : '') + '</label><input id="pw" type="password" autocomplete="' + (signup ? 'new-password' : 'current-password') + '" minlength="8" required></div>' +
+      '<div class="row"><button class="btn" type="submit">' + (signup ? 'Create account' : 'Sign in') + '</button>' +
+      '<button class="btn alt" type="button" id="swap">' + (signup ? 'I have an account' : 'Create an account') + '</button></div></form>' +
+      (signup ? '' : '<p class="sub" style="margin-top:14px"><a href="#" id="forgot">Forgot password?</a></p>') + '</div>';
+    document.getElementById('swap').onclick = function () { renderAuth(signup ? 'signin' : 'signup'); };
+    var fg = document.getElementById('forgot');
+    if (fg) fg.onclick = function (e) {
+      e.preventDefault();
+      var em = document.getElementById('em').value.trim();
+      if (!em) { flash('err', 'Enter your email first.'); return renderAuth('signin'); }
+      sb.auth.resetPasswordForEmail(em, { redirectTo: location.href.split('#')[0] }).then(function (r) {
+        flash(r.error ? 'err' : 'ok', r.error ? r.error.message : 'If that email has an account, a reset link is on its way.'); renderAuth('signin');
+      });
+    };
+    document.getElementById('authForm').onsubmit = function (e) {
+      e.preventDefault();
+      var em = document.getElementById('em').value.trim(), pw = document.getElementById('pw').value;
+      var btn = e.target.querySelector('button[type=submit]'); btn.disabled = true;
+      var p = signup ? sb.auth.signUp({ email: em, password: pw, options: { emailRedirectTo: location.href.split('#')[0] } }) : sb.auth.signInWithPassword({ email: em, password: pw });
+      p.then(function (r) {
+        if (r.error) { flash('err', r.error.message); return renderAuth(mode); }
+        if (signup && !r.data.session) { flash('ok', 'Check your email to confirm your account, then sign in.'); return renderAuth('signin'); }
+      });
+    };
+  }
+
+  function renderConsent() {
+    nav.hidden = true;
+    var have = {}; S.consents.forEach(function (c) { if (c.version === CFG.consentVersion) have[c.consent_type] = 1; });
+    app.innerHTML = '<div class="panel auth" style="max-width:640px"><h2>Before you start</h2><p class="sub">Please review and accept each item. You can see what is stored about you any time under Account.</p>' + flashHtml() +
+      '<form id="cf">' + CONSENTS.map(function (c) {
+        return '<div class="check"><input type="checkbox" id="c_' + c[0] + '"' + (have[c[0]] ? ' checked disabled' : '') + '><label for="c_' + c[0] + '" style="font-weight:400">' + esc(c[1]) + '</label></div>';
+      }).join('') + '<div class="row"><button class="btn" type="submit" id="cbtn" disabled>Accept and continue</button><button class="btn alt" type="button" id="so">Sign out</button></div></form></div>';
+    var form = document.getElementById('cf');
+    function refresh() { document.getElementById('cbtn').disabled = !CONSENTS.every(function (c) { return document.getElementById('c_' + c[0]).checked; }); }
+    form.addEventListener('change', refresh); refresh();
+    document.getElementById('so').onclick = function () { sb.auth.signOut(); };
+    form.onsubmit = function (e) {
+      e.preventDefault();
+      var rows = CONSENTS.filter(function (c) { return !have[c[0]]; }).map(function (c) { return { user_id: S.user.id, consent_type: c[0], version: CFG.consentVersion }; });
+      sb.from('consents').insert(rows).then(function (r) {
+        if (r.error) { fail(r.error); return renderConsent(); }
+        return loadAll().then(function () { S.form = formFromState(); render(); });
+      });
+    };
+  }
+
+  /* ---------- plan ---------- */
+  function renderPlan() {
+    var f = S.form, p = profileForEngine();
+    var evals = S.cards.map(function (c) { return E.evaluate(c, p); }).sort(function (a, b) { return b.rank - a.rank; });
+    var plan = E.buildPlan(evals, p);
+    var h = flashHtml() + '<div class="panel"><h2>Your profile</h2><p class="sub">Ranges and counts only. Never enter your SSN, a full credit report, or card numbers.</p><form id="pf">' +
+      '<div class="grid">' +
+      '<div class="field"><label for="f_score">Credit score range</label><select id="f_score">' + opts(SCORES, f.score) + '</select></div>' +
+      '<div class="field"><label for="f_new24">New personal accounts, last 24 months</label><input id="f_new24" type="number" min="0" max="50" value="' + esc(f.new24) + '"></div>' +
+      '<div class="field"><label for="f_amexHeld">Amex credit cards you hold</label><input id="f_amexHeld" type="number" min="0" max="20" value="' + esc(f.amexHeld) + '"></div>' +
+      '<div class="field"><label for="f_amex90">Amex cards opened, last 90 days</label><input id="f_amex90" type="number" min="0" max="20" value="' + esc(f.amex90) + '"></div>' +
+      '<div class="field"><label for="f_biz">Business age</label><select id="f_biz">' + opts(BIZ, f.biz) + '</select></div>' +
+      '<div class="field"><label for="f_goal">Main goal</label><select id="f_goal">' + opts(GOALS, f.goal) + '</select></div>' +
+      '<div class="field"><label for="f_plan">Cards in your plan</label><select id="f_plan">' + opts([[2, '2'], [3, '3'], [4, '4'], [5, '5']], f.plan) + '</select></div>' +
+      '<div class="field"><label for="f_business_name">Business name (optional)</label><input id="f_business_name" type="text" maxlength="120" value="' + esc(f.business_name) + '"></div>' +
+      '</div><div class="check"><input type="checkbox" id="f_relBofa"' + (f.relBofa ? ' checked' : '') + '><label for="f_relBofa" style="font-weight:400">I bank with Bank of America</label></div>' +
+      '<div class="check"><input type="checkbox" id="f_relUsb"' + (f.relUsb ? ' checked' : '') + '><label for="f_relUsb" style="font-weight:400">I bank with U.S. Bank</label></div>' +
+      '<button class="btn" type="submit">Save profile</button></form></div>';
+    h += '<div class="panel"><h2>Application plan</h2><p class="sub">Ordered so rule-sensitive issuers go first. Apply to one card, wait for the decision, then continue. Dates are suggested earliest times, not issuer requirements.</p>';
+    if (!plan.length) h += '<p>No card clears the rules for this goal right now. Review the cards on hold below, or change your goal.</p>';
+    else {
+      h += '<ol class="steps">' + plan.map(function (s, i) {
+        var c = s.e.card, extra = (S.form.goal === 'financing' && c.intro) ? ' · 0% for ' + c.intro + ' months' : '';
+        return '<li><span class="when">' + (i === 0 ? 'Start ' : 'After ') + fmt(s.date.toISOString().slice(0, 10)) + '</span><div><b>' + esc(c.issuer + ' ' + c.name) + '</b><br><span class="pill ' + s.e.lik + '">' + esc(E.LABEL[s.e.lik]) + '</span>' + esc(extra) + '</div></li>';
+      }).join('') + '</ol><div class="row" style="margin-top:12px"><button class="btn" id="addPlan">Add this plan to my tracker</button></div>' +
+        '<div class="callout">Check your actual credit report for new accounts and inquiries before each step. If a card is denied, stop and review the reason before applying elsewhere. Each denial costs a hard inquiry.</div>';
+    }
+    h += '</div>';
+    [['Ready to consider', ['likely', 'possible']], ['Reach', ['reach', 'unlikely']], ['On hold', ['hold']]].forEach(function (g) {
+      var list = evals.filter(function (e) { return g[1].indexOf(e.lik) >= 0; });
+      if (!list.length) return;
+      h += '<div class="panel"><h3>' + g[0] + ' (' + list.length + ')</h3>' + list.map(function (e) {
+        var c = e.card;
+        return '<article class="cardrow"><div class="issuer">' + esc(c.issuer) + '</div><h4>' + esc(c.name) + ' <span class="pill ' + e.lik + '">' + esc(E.LABEL[e.lik]) + '</span></h4>' +
+          '<div class="facts-line"><span>Annual fee <b>' + feeText(c) + '</b></span><span>0% intro <b>' + introText(c) + '</b></span><span>Rewards <b>' + esc(c.rewards) + '</b></span></div>' +
+          '<ul class="reasons">' + e.flags.map(function (x) { return '<li class="' + esc(x.level) + '">' + esc(x.text) + '</li>'; }).join('') + '</ul>' +
+          '<div class="src">Data confidence: ' + esc(c.conf) + '. ' + esc(c.note) + ' ' + (/^https?:\/\//.test(c.src) ? '<a href="' + esc(c.src) + '" target="_blank" rel="noopener noreferrer">Source</a>' : '') + '</div></article>';
+      }).join('') + '</div>';
+    });
+    app.innerHTML = h;
+
+    var form = document.getElementById('pf');
+    function readForm() {
+      ['score', 'new24', 'amexHeld', 'amex90', 'biz', 'goal', 'plan', 'business_name'].forEach(function (k) { S.form[k] = document.getElementById('f_' + k).value; });
+      S.form.relBofa = document.getElementById('f_relBofa').checked; S.form.relUsb = document.getElementById('f_relUsb').checked;
+    }
+    form.addEventListener('change', function () { readForm(); renderPlan(); });
+    form.onsubmit = function (e) {
+      e.preventDefault(); readForm();
+      var f = S.form, uid = S.user.id;
+      Promise.all([
+        sb.from('credit_profiles').upsert({ user_id: uid, score_band: +f.score, new_accounts_24m: Math.max(0, Math.min(50, +f.new24 || 0)), amex_credit_held: Math.max(0, Math.min(20, +f.amexHeld || 0)), amex_opened_90d: Math.max(0, Math.min(20, +f.amex90 || 0)), rel_bofa: !!f.relBofa, rel_usb: !!f.relUsb, goal: f.goal }, { onConflict: 'user_id' }),
+        sb.from('profiles').update({ business_name: f.business_name || null, business_started_on: E.dateFromBiz(f.biz) }).eq('id', uid)
+      ]).then(function (r) {
+        var err = r[0].error || r[1].error;
+        if (err) fail(err); else flash('ok', 'Profile saved.');
+        return loadAll();
+      }).then(function () { renderPlan(); }, function (e2) { fail(e2); renderPlan(); });
+    };
+    var add = document.getElementById('addPlan');
+    if (add) add.onclick = function () {
+      var existing = {}; S.apps.forEach(function (a) { if (a.status !== 'withdrawn' && a.status !== 'denied') existing[a.card_id] = 1; });
+      var rows = plan.filter(function (s) { return !existing[s.e.card.id]; }).map(function (s) {
+        return { user_id: S.user.id, card_id: s.e.card.id, status: 'planned', planned_on: s.date.toISOString().slice(0, 10), score_band: +S.form.score, new_accounts_24m: +S.form.new24 || 0 };
+      });
+      if (!rows.length) { flash('info', 'Those cards are already in your tracker.'); return renderPlan(); }
+      sb.from('applications').insert(rows).then(function (r) {
+        if (r.error) { fail(r.error); return renderPlan(); }
+        flash('ok', rows.length + ' card' + (rows.length > 1 ? 's' : '') + ' added to your tracker.');
+        return loadAll().then(function () { S.tab = 'tracker'; render(); });
+      });
+    };
+  }
+
+  /* ---------- tracker ---------- */
+  function renderTracker() {
+    var h = flashHtml() + '<div class="panel"><h2>Application tracker</h2><p class="sub">Record what actually happens at each issuer. Your own outcomes keep your plan honest. Only anonymized totals from groups of five or more are ever used to improve estimates.</p>';
+    if (!S.apps.length) h += '<p>Nothing here yet. Build a plan and add it to your tracker.</p>';
+    else {
+      h += '<div class="tablewrap"><table><thead><tr><th>Card</th><th>Status</th><th>Applied</th><th>Decided</th><th>Limit</th><th>Notes</th><th></th></tr></thead><tbody>';
+      S.apps.forEach(function (a) {
+        var c = cardById(a.card_id), id = esc(a.id), ends = a.intro_ends_on ? '<div class="src">0% ends ' + esc(fmt(a.intro_ends_on)) + '</div>' : '';
+        h += '<tr data-id="' + id + '"><td><b>' + esc(cardName(a.card_id)) + '</b>' + (a.planned_on ? '<div class="src">Planned ' + esc(fmt(a.planned_on)) + '</div>' : '') + ends + '</td>' +
+          '<td><select data-f="status" aria-label="Status">' + opts(STATUSES.map(function (s) { return [s, s]; }), a.status) + '</select></td>' +
+          '<td><input type="date" data-f="applied_on" value="' + esc(a.applied_on || '') + '" aria-label="Applied on"></td>' +
+          '<td><input type="date" data-f="decided_on" value="' + esc(a.decided_on || '') + '" aria-label="Decided on"></td>' +
+          '<td><input type="number" min="0" step="100" data-f="credit_limit" value="' + esc(a.credit_limit == null ? '' : a.credit_limit) + '" aria-label="Credit limit"' + (a.status === 'approved' ? '' : ' disabled') + '></td>' +
+          '<td><input type="text" maxlength="200" data-f="denial_reason" placeholder="Denial reason / note" value="' + esc(a.denial_reason || '') + '" aria-label="Denial reason or note"></td>' +
+          '<td class="row"><button class="btn" data-act="save">Save</button><button class="btn alt" data-act="del">Remove</button></td></tr>';
+      });
+      h += '</tbody></table></div>';
+    }
+    h += '</div>';
+    app.innerHTML = h;
+    var tbody = app.querySelector('tbody'); if (!tbody) return;
+    tbody.addEventListener('change', function (e) {
+      if (e.target.dataset.f !== 'status') return;
+      var tr = e.target.closest('tr'), st = e.target.value;
+      var lim = tr.querySelector('[data-f=credit_limit]'); lim.disabled = st !== 'approved'; if (st !== 'approved') lim.value = '';
+      if (st === 'applied' && !tr.querySelector('[data-f=applied_on]').value) tr.querySelector('[data-f=applied_on]').value = today();
+      if ((st === 'approved' || st === 'denied') && !tr.querySelector('[data-f=decided_on]').value) tr.querySelector('[data-f=decided_on]').value = today();
+    });
+    tbody.addEventListener('click', function (e) {
+      var act = e.target.dataset.act; if (!act) return;
+      var tr = e.target.closest('tr'), id = tr.dataset.id;
+      function v(f) { return tr.querySelector('[data-f=' + f + ']').value; }
+      if (act === 'del') {
+        return sb.from('applications').delete().eq('id', id).then(function (r) {
+          if (r.error) fail(r.error); else flash('ok', 'Removed.');
+          return loadAll();
+        }).then(function () { renderTracker(); });
+      }
+      var a = S.apps.filter(function (x) { return x.id === id; })[0], c = a && cardById(a.card_id), st = v('status');
+      var limit = st === 'approved' && v('credit_limit') !== '' ? Math.max(0, +v('credit_limit')) : null;
+      var decided = v('decided_on') || null;
+      var upd = { status: st, applied_on: v('applied_on') || null, decided_on: decided, credit_limit: limit, denial_reason: v('denial_reason') || null,
+        intro_ends_on: (st === 'approved' && decided && c && c.intro > 0) ? E.addMonths(new Date(decided + 'T00:00:00'), c.intro).toISOString().slice(0, 10) : null };
+      sb.from('applications').update(upd).eq('id', id).then(function (r) {
+        if (r.error) fail(r.error); else flash('ok', 'Saved.');
+        return loadAll();
+      }).then(function () { renderTracker(); });
+    });
+  }
+
+  /* ---------- repayment ---------- */
+  function renderRepay() {
+    var amt = S.repay ? Number(S.repay.amount) : 25000, mo = S.repay ? S.repay.months : 12;
+    var p = profileForEngine();
+    var plan = E.buildPlan(S.cards.map(function (c) { return E.evaluate(c, p); }), p);
+    var h = flashHtml() + '<div class="panel"><h2>Repayment planner</h2><p class="sub">Work out the payoff before you spend. Missing a minimum payment can end a 0% period early.</p>' +
+      '<form id="rf" class="grid"><div class="field"><label for="r_amt">Amount you plan to borrow ($)</label><input id="r_amt" type="number" min="500" step="500" value="' + esc(amt) + '"></div>' +
+      '<div class="field"><label for="r_mo">Months to pay off</label><input id="r_mo" type="number" min="1" max="60" value="' + esc(mo) + '"></div>' +
+      '<div class="field"><label>&nbsp;</label><button class="btn" type="submit">Save plan</button></div></form><p id="mline" class="sub"></p>' +
+      '<div class="tablewrap"><table><thead><tr><th>Card</th><th>Covers your payoff?</th><th>Est. interest if on this card</th></tr></thead><tbody id="rt"></tbody></table></div>' +
+      '<div class="callout">Interest figures use the middle of each card\'s published APR range (22% when unknown) and are rough illustrations. Issuers set actual limits and rates.</div></div>';
+    app.innerHTML = h;
+    function calc() {
+      var a = Math.max(500, +document.getElementById('r_amt').value || 0), m = Math.max(1, Math.min(60, +document.getElementById('r_mo').value || 12));
+      document.getElementById('mline').textContent = 'Even payments of ' + money(a / m) + ' per month over ' + m + ' months.';
+      document.getElementById('rt').innerHTML = !plan.length ? '<tr><td colspan="3">Build a plan first.</td></tr>' : plan.map(function (s) {
+        var c = s.e.card, apr = c.aprHigh != null ? (c.aprLow + c.aprHigh) / 2 : 22, cover, intr;
+        if (c.intro == null) { cover = 'Verify the 0% period'; intr = 'Unknown'; }
+        else if (c.intro === 0) { cover = 'No 0% period'; intr = c.type === 'charge' ? 'Pay in full each month' : 'About ' + money(E.simulate(a, m, 0, apr).interest); }
+        else if (c.intro >= m) { cover = 'Yes (' + c.intro + ' mo)' + (c.introVerify ? ', verify' : ''); intr = '$0'; }
+        else { cover = 'Short by ' + (m - c.intro) + ' mo'; intr = 'About ' + money(E.simulate(a, m, c.intro, apr).interest); }
+        return '<tr><td>' + esc(c.issuer + ' ' + c.name) + '</td><td>' + esc(cover) + '</td><td>' + esc(intr) + '</td></tr>';
+      }).join('');
+    }
+    document.getElementById('rf').addEventListener('input', calc); calc();
+    document.getElementById('rf').onsubmit = function (e) {
+      e.preventDefault();
+      var a = Math.max(500, +document.getElementById('r_amt').value || 0), m = Math.max(1, Math.min(60, Math.round(+document.getElementById('r_mo').value) || 12));
+      sb.from('repayment_plans').insert({ user_id: S.user.id, amount: a, months: m }).then(function (r) {
+        if (r.error) fail(r.error); else flash('ok', 'Repayment plan saved.');
+        return loadAll();
+      }).then(function () { renderRepay(); });
+    };
+  }
+
+  /* ---------- account ---------- */
+  function renderAccount() {
+    app.innerHTML = flashHtml() + '<div class="panel"><h2>Account</h2><p class="sub">Signed in as ' + esc(S.user.email) + '</p>' +
+      '<div class="row"><button class="btn" id="exp">Download my data (JSON)</button><button class="btn alt" id="so">Sign out</button></div></div>' +
+      '<div class="panel"><h3>Delete my data</h3><p class="sub">Removes your credit profile, tracker entries, existing-card records and repayment plans. Your consent record and login stay so we can show what you agreed to; contact support to close the login itself.</p>' +
+      '<button class="btn danger" id="del">Delete my data</button></div>';
+    document.getElementById('so').onclick = function () { sb.auth.signOut(); };
+    document.getElementById('exp').onclick = function () {
+      var blob = new Blob([JSON.stringify({ exported_at: new Date().toISOString(), email: S.user.email, profile: S.profile, credit_profile: S.credit, applications: S.apps, repayment_plan: S.repay, consents: S.consents }, null, 2)], { type: 'application/json' });
+      var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'prostack-my-data.json'; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    };
+    document.getElementById('del').onclick = function () {
+      if (!window.confirm('Delete your credit profile, tracker and repayment plans? This cannot be undone.')) return;
+      var uid = S.user.id;
+      Promise.all(['applications', 'user_cards', 'repayment_plans', 'credit_profiles'].map(function (t) { return sb.from(t).delete().eq('user_id', uid); })
+        .concat([sb.from('profiles').update({ business_name: null, business_started_on: null, full_name: null, state: null, business_type: null }).eq('id', uid)]))
+        .then(function (r) {
+          var err = r.map(function (x) { return x.error; }).filter(Boolean)[0];
+          if (err) fail(err); else flash('ok', 'Your data was deleted.');
+          return loadAll();
+        }).then(function () { S.form = formFromState(); renderAccount(); });
+    };
+  }
+
+  /* ---------- shell ---------- */
+  function render() {
+    if (!S.user) return renderAuth('signin');
+    if (!hasAllConsents()) return renderConsent();
+    nav.hidden = false;
+    Array.prototype.forEach.call(nav.querySelectorAll('button'), function (b) { b.setAttribute('aria-current', b.dataset.tab === S.tab ? 'page' : 'false'); });
+    ({ plan: renderPlan, tracker: renderTracker, repay: renderRepay, account: renderAccount }[S.tab] || renderPlan)();
+  }
+  nav.addEventListener('click', function (e) { var t = e.target.dataset.tab; if (t) { S.tab = t; render(); window.scrollTo(0, 0); } });
+
+  var booting = false;
+  function onSession(session) {
+    var user = session && session.user ? session.user : null;
+    if (!user) { S.user = null; S.form = null; return render(); }
+    if (S.user && S.user.id === user.id) return;
+    S.user = user; booting = true;
+    app.innerHTML = '<p>Loading…</p>';
+    loadAll().then(function () { S.form = formFromState(); booting = false; render(); }, function (e) { booting = false; fail(e); render(); });
+  }
+  sb.auth.onAuthStateChange(function (ev, session) { setTimeout(function () { onSession(session); }, 0); });
+  sb.auth.getSession().then(function (r) { onSession(r.data.session); });
+})();

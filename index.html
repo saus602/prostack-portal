@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ProStack Client Portal</title>
+<meta name="robots" content="noindex">
+<style>
+:root{--bg:#f3f5f9;--surface:#fff;--ink:#0f1b33;--muted:#55627b;--line:#d6dce8;--band:#0e2040;--band-ink:#f1f4fa;--gold:#9a6f12;--gold-fill:#d9a93c;
+--good:#17704a;--good-soft:#dff2e8;--warn:#8f5a00;--warn-soft:#fbeccd;--bad:#a8332a;--bad-soft:#f8dcd8;--soft:#e8ecf4;--focus:#2a5bd7;
+--serif:Georgia,'Times New Roman',serif;--sans:system-ui,-apple-system,'Segoe UI',sans-serif}
+@media (prefers-color-scheme:dark){:root{--bg:#0a1322;--surface:#101d35;--ink:#e8edf7;--muted:#9aa7c0;--line:#27365a;--band:#0c1b36;--gold:#e3b95a;
+--good:#5fd09a;--good-soft:#12301f;--warn:#f0b755;--warn-soft:#33260c;--bad:#f08a80;--bad-soft:#38161a;--soft:#18263f;--focus:#8fb0ff;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 15px/1.55 var(--sans)}
+h1,h2,h3{font-family:var(--serif);margin:0;font-weight:600}
+a{color:var(--gold)}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.wrap{max-width:1040px;margin:0 auto;padding:0 16px}
+header.band{background:var(--band);color:var(--band-ink)}
+header .wrap{display:flex;justify-content:space-between;align-items:center;gap:12px;padding-block:14px;flex-wrap:wrap}
+.mark{font:600 22px/1 var(--serif)}.mark b{color:var(--gold-fill)}
+nav{display:flex;gap:6px;flex-wrap:wrap}
+nav button{background:none;border:0;border-bottom:2px solid transparent;color:var(--band-ink);padding:6px 10px;cursor:pointer}
+nav button[aria-current=page]{border-bottom-color:var(--gold-fill)}
+main{padding-block:26px 50px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:18px;margin-bottom:18px}
+.panel h2{font-size:22px;margin-bottom:6px}.panel h3{font-size:17px;margin-bottom:4px}
+.sub{color:var(--muted);font-size:13px;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
+.field{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
+label{font-size:13px;font-weight:600}
+input[type=text],input[type=email],input[type=password],input[type=number],input[type=date],select{background:var(--surface);border:1px solid var(--line);border-radius:3px;padding:9px 10px;width:100%}
+.check{display:flex;gap:10px;align-items:flex-start;margin-bottom:10px;font-size:14px}
+.check input{margin-top:4px}
+.btn{background:var(--band);color:var(--band-ink);border:0;border-radius:3px;padding:10px 16px;cursor:pointer;font-weight:600}
+.btn.alt{background:var(--soft);color:var(--ink)}.btn.danger{background:var(--bad);color:#fff}
+.btn[disabled]{opacity:.5;cursor:default}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.msg{padding:10px 12px;border-radius:3px;margin-bottom:12px;font-size:14px}
+.msg.err{background:var(--bad-soft);color:var(--bad)}.msg.ok{background:var(--good-soft);color:var(--good)}.msg.info{background:var(--soft)}
+.callout{background:var(--warn-soft);color:var(--ink);border-left:3px solid var(--gold-fill);padding:10px 12px;margin-top:12px;font-size:13px}
+.pill{display:inline-block;font-size:12px;font-weight:600;padding:2px 8px;border-radius:99px;background:var(--soft)}
+.pill.likely,.pill.possible,.pill.approved{background:var(--good-soft);color:var(--good)}
+.pill.reach,.pill.unlikely,.pill.planned,.pill.applied{background:var(--warn-soft);color:var(--warn)}
+.pill.hold,.pill.denied{background:var(--bad-soft);color:var(--bad)}
+ol.steps{list-style:none;padding:0;margin:0}
+ol.steps li{display:grid;grid-template-columns:130px 1fr;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
+@media(max-width:560px){ol.steps li{grid-template-columns:1fr}}
+.when{color:var(--muted);font-size:13px}
+.cardrow{border-top:1px solid var(--line);padding:12px 0}
+.cardrow h4{margin:0;font-size:16px}.issuer{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.facts-line{display:flex;gap:6px 18px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin:6px 0}
+ul.reasons{margin:6px 0;padding-left:18px;font-size:13px}
+ul.reasons li.block{color:var(--bad)}ul.reasons li.warn{color:var(--warn)}ul.reasons li.good{color:var(--good)}
+.src{font-size:12px;color:var(--muted)}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:8px;border-top:1px solid var(--line);vertical-align:top}
+.tablewrap{overflow-x:auto}
+.auth{max-width:420px;margin:40px auto}
+.foot{font-size:12px;color:var(--muted);padding-block:20px;border-top:1px solid var(--line)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<header class="band"><div class="wrap">
+  <div class="mark">Pro<b>Stack</b> <span style="font:500 12px var(--sans);opacity:.7">Client Portal</span></div>
+  <nav id="nav" hidden aria-label="Sections">
+    <button data-tab="plan" aria-current="page">Plan</button>
+    <button data-tab="tracker">Tracker</button>
+    <button data-tab="repay">Repayment</button>
+    <button data-tab="account">Account</button>
+  </nav>
+</div></header>
+<main class="wrap" id="app"><p>Loading…</p></main>
+<div class="wrap foot">
+  ProStack is a planning tool. It does not apply for credit on your behalf, guarantee approval, or provide credit repair, legal, tax or financial advice.
+  Odds and dates are estimates based on publicly reported issuer behavior and can be wrong. You apply directly with each issuer.
+  Card terms change; confirm every term with the issuer before applying.
+</div>
+<script src="vendor/supabase.js"></script>
+<script src="config.js"></script>
+<script src="engine.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
