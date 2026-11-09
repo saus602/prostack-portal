@@ -71,7 +71,7 @@
     app.innerHTML = '<div class="panel auth"><h2>' + (signup ? 'Create your account' : 'Sign in') + '</h2>' +
       '<p class="sub">' + (signup ? 'Build a card plan for your business and track every application in one place.' : 'Welcome back.') + '</p>' + flashHtml() +
       '<form id="authForm"><div class="field"><label for="em">Email</label><input id="em" type="email" autocomplete="email" required></div>' +
-      '<div class="field"><label for="pw">Password' + (signup ? ' (at least 8 characters)' : '') + '</label><input id="pw" type="password" autocomplete="' + (signup ? 'new-password' : 'current-password') + '" minlength="8" required></div>' +
+      '<div class="field"><label for="pw">Password' + (signup ? ' (at least 10 characters)' : '') + '</label><input id="pw" type="password" autocomplete="' + (signup ? 'new-password' : 'current-password') + '" minlength="10" required></div>' +
       '<div class="row"><button class="btn" type="submit">' + (signup ? 'Create account' : 'Sign in') + '</button>' +
       '<button class="btn alt" type="button" id="swap">' + (signup ? 'I have an account' : 'Create an account') + '</button></div></form>' +
       (signup ? '' : '<p class="sub" style="margin-top:14px"><a href="#" id="forgot">Forgot password?</a></p>') + '</div>';
