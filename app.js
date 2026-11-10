@@ -3,7 +3,7 @@
   var CFG = window.PROSTACK_CONFIG, E = window.Engine;
   var sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey);
   var app = document.getElementById('app'), nav = document.getElementById('nav');
-  var S = { user: null, tab: 'plan', cards: [], profile: null, credit: null, apps: [], repay: null, consents: [], form: null, flash: null, isStaff: false, isAdmin: false };
+  var S = { user: null, tab: 'plan', cards: [], profile: null, credit: null, apps: [], repay: null, consents: [], form: null, flash: null, isStaff: false, isAdmin: false, imp: null, impMsg: '' };
   var CONSENTS = [
     ['terms', 'I have read the terms of use (terms.html) and privacy summary (privacy.html), agree to them, and understand ProStack is a planning tool that does not apply for credit on my behalf or guarantee approval.'],
     ['credit_data', 'I agree to store the credit ranges and counts I enter here (never my SSN, full report, or card numbers) so ProStack can build my plan.'],
@@ -124,7 +124,8 @@
     var f = S.form, p = profileForEngine();
     var evals = S.cards.map(function (c) { return E.evaluate(c, p); }).sort(function (a, b) { return b.rank - a.rank; });
     var plan = E.buildPlan(evals, p);
-    var h = flashHtml() + '<div class="panel"><h2>Your profile</h2><p class="sub">Ranges and counts only. Never enter your SSN, a full credit report, or card numbers.</p><form id="pf">' +
+    var h0 = flashHtml();
+    var h = '<div class="panel"><h2>Your profile</h2><p class="sub">Ranges and counts only. Never enter your SSN, card numbers, or bureau logins. You can fill in the counts from your own Experian report below.</p><form id="pf">' +
       '<div class="grid">' +
       '<div class="field"><label for="f_score">Credit score range</label><select id="f_score">' + opts(SCORES, f.score) + '</select></div>' +
       '<div class="field"><label for="f_new24">New personal accounts, last 24 months</label><input id="f_new24" type="number" min="0" max="50" value="' + esc(f.new24) + '"></div>' +
@@ -137,6 +138,29 @@
       '</div><div class="check"><input type="checkbox" id="f_relBofa"' + (f.relBofa ? ' checked' : '') + '><label for="f_relBofa" style="font-weight:400">I bank with Bank of America</label></div>' +
       '<div class="check"><input type="checkbox" id="f_relUsb"' + (f.relUsb ? ' checked' : '') + '><label for="f_relUsb" style="font-weight:400">I bank with U.S. Bank</label></div>' +
       '<button class="btn" type="submit">Save profile</button></form></div>';
+
+    var I = window.Importer, imp = S.imp;
+    var hp = '<details class="panel" id="impBox"' + (imp || S.impMsg ? ' open' : '') + '><summary><b>Fill in from my Experian report</b></summary>' +
+      '<p class="sub" style="margin-top:8px">Download your report from Experian (free at annualcreditreport.com), then load it here. It is read in this browser only. It is never uploaded or saved, and ProStack never logs in to Experian or any bureau for you. Only the numbers you confirm go into your profile. Check every line against your report.</p>' +
+      '<div class="check"><input type="checkbox" id="imp_ok"><label for="imp_ok" style="font-weight:400">I am choosing to load my own credit report for this purpose.</label></div>' +
+      '<div class="field"><label for="imp_file">Report file (PDF or saved text)</label><input type="file" id="imp_file" accept=".pdf,.txt,.html,.htm"></div>' +
+      '<div class="field"><label for="imp_text">Or paste the text of your report</label><textarea id="imp_text" rows="4"></textarea></div>' +
+      '<button class="btn" id="imp_go" type="button" disabled>Read report</button>' + (S.impMsg ? '<div class="msg info" style="margin-top:10px">' + esc(S.impMsg) + '</div>' : '');
+    if (imp) {
+      var sm = I.summarize(imp.accounts);
+      hp += '<div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>Account</th><th>Opened (YYYY-MM-DD)</th><th>Card</th><th>Amex</th><th>Open</th><th></th></tr></thead><tbody id="impBody">' +
+        imp.accounts.map(function (x, i) {
+          return '<tr data-i="' + i + '"><td><input type="text" data-k="name" value="' + esc(x.name) + '" aria-label="Account name"></td><td><input type="text" data-k="opened" value="' + esc(x.opened) + '" style="width:120px" aria-label="Date opened"></td>' +
+            '<td><input type="checkbox" data-k="card"' + (x.card ? ' checked' : '') + ' aria-label="Credit or charge card"></td><td><input type="checkbox" data-k="amex"' + (x.amex ? ' checked' : '') + ' aria-label="American Express"></td>' +
+            '<td><input type="checkbox" data-k="open"' + (x.open ? ' checked' : '') + ' aria-label="Open"></td><td><button class="btn alt" type="button" data-act="drop">Remove</button></td></tr>';
+        }).join('') + '</tbody></table></div>' +
+        '<p style="margin:10px 0"><b>New card accounts, 24 months:</b> ' + sm.new24 + ' &nbsp; <b>Amex cards held:</b> ' + sm.amexHeld + ' &nbsp; <b>Amex opened, 90 days:</b> ' + sm.amex90 +
+        (imp.inq ? ' &nbsp; <span class="src">Hard inquiries, 24 months: ' + imp.inq + ' (for your information)</span>' : '') +
+        (imp.score ? ' &nbsp; <span class="src">Score found: ' + imp.score + ' (range ' + I.bandFor(imp.score) + ')</span>' : '') + '</p>' +
+        '<div class="row"><button class="btn" type="button" id="imp_use">Use these numbers</button><button class="btn alt" type="button" id="imp_clear">Discard</button></div>';
+    }
+    hp += '</details>';
+    h = h0 + hp + h;
     h += '<div class="panel"><h2>Application plan</h2><p class="sub">Ordered so rule-sensitive issuers go first. Apply to one card, wait for the decision, then continue. Dates are suggested earliest times, not issuer requirements.</p>';
     if (!plan.length) h += '<p>No card clears the rules for this goal right now. Review the cards on hold below, or change your goal.</p>';
     else {
@@ -160,6 +184,57 @@
     });
     app.innerHTML = h;
 
+
+    // report import (all in this browser; nothing is uploaded)
+    (function () {
+      var ok = document.getElementById('imp_ok'), go = document.getElementById('imp_go'), file = document.getElementById('imp_file'), txt = document.getElementById('imp_text');
+      function can() { go.disabled = !ok.checked || !(file.files.length || txt.value.trim()); }
+      [ok, file, txt].forEach(function (el) { el.addEventListener('input', can); el.addEventListener('change', can); });
+      function pdfText(f) {
+        if (!window.pdfjsLib) return Promise.reject(new Error('PDF reader unavailable'));
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
+        return f.arrayBuffer().then(function (buf) { return window.pdfjsLib.getDocument({ data: buf }).promise; }).then(function (doc) {
+          var pages = [], chain = Promise.resolve();
+          for (var i = 1; i <= Math.min(doc.numPages, 60); i++) (function (n) {
+            chain = chain.then(function () { return doc.getPage(n); }).then(function (pg) { return pg.getTextContent(); }).then(function (c) { pages.push(c.items.map(function (it) { return it.str; }).join(' ')); });
+          })(i);
+          return chain.then(function () { return pages.join('\n'); });
+        });
+      }
+      go.onclick = function () {
+        go.disabled = true; S.impMsg = 'Reading…';
+        var f = file.files[0], p;
+        if (f && f.size > 15 * 1024 * 1024) { S.impMsg = 'That file is too large. Try pasting the text instead.'; return renderPlan(); }
+        if (f) p = /\.pdf$/i.test(f.name) ? pdfText(f) : f.text(); else p = Promise.resolve(txt.value);
+        p.then(function (text) {
+          var r = window.Importer.parseReport(text);
+          text = null; txt.value = '';
+          if (!r.accounts.length) { S.imp = null; S.impMsg = 'We could not find accounts in that report. Try pasting its text, or enter the numbers yourself below.'; }
+          else { S.imp = { accounts: r.accounts, score: r.score, inq: r.hardInquiries24 }; S.impMsg = 'Found ' + r.accounts.length + ' accounts. Check each line, fix anything wrong, then use the numbers.'; }
+          renderPlan();
+        }).catch(function () { S.imp = null; S.impMsg = 'We could not read that file. Try pasting the text instead.'; renderPlan(); });
+      };
+      var body = document.getElementById('impBody');
+      if (body) {
+        body.addEventListener('change', function (e) {
+          var tr = e.target.closest('tr'), k = e.target.dataset.k; if (!tr || !k) return;
+          var x = S.imp.accounts[+tr.dataset.i]; x[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value.trim();
+          renderPlan();
+        });
+        body.addEventListener('click', function (e) {
+          if (e.target.dataset.act !== 'drop') return;
+          S.imp.accounts.splice(+e.target.closest('tr').dataset.i, 1); renderPlan();
+        });
+        document.getElementById('imp_use').onclick = function () {
+          var sm = window.Importer.summarize(S.imp.accounts);
+          S.form.new24 = sm.new24; S.form.amexHeld = sm.amexHeld; S.form.amex90 = sm.amex90;
+          if (S.imp.score) S.form.score = window.Importer.bandFor(S.imp.score);
+          S.imp = null; S.impMsg = ''; flash('ok', 'Filled in from your report. The report itself was not kept. Review the numbers, then press Save profile.');
+          renderPlan();
+        };
+        document.getElementById('imp_clear').onclick = function () { S.imp = null; S.impMsg = ''; renderPlan(); };
+      }
+    })();
     var form = document.getElementById('pf');
     function readForm() {
       ['score', 'new24', 'amexHeld', 'amex90', 'biz', 'goal', 'plan', 'business_name'].forEach(function (k) { S.form[k] = document.getElementById('f_' + k).value; });
@@ -513,7 +588,7 @@
   var booting = false;
   function onSession(session) {
     var user = session && session.user ? session.user : null;
-    if (!user) { S.user = null; S.form = null; return render(); }
+    if (!user) { S.user = null; S.form = null; S.imp = null; S.impMsg = ''; return render(); }
     if (S.user && S.user.id === user.id) return;
     S.user = user; booting = true;
     app.innerHTML = '<p>Loading…</p>';
