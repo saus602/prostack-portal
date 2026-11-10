@@ -13,11 +13,20 @@ const HERMES_MODEL = env.HERMES_MODEL || 'hermes3';
 const MAX_CARDS = Number(env.MAX_CARDS || 10);
 const DRY_RUN = env.DRY_RUN === '1';
 
-// "Hermes only": refuse to send anything to a model that is not on this computer.
+// "Hermes only": refuse to send anything to a model that is not on your own computer or home/office network.
+// Allowed: localhost, private network addresses (192.168.x.x, 10.x.x.x, 172.16-31.x.x), Tailscale (100.64-127.x.x) and .local names.
+function isPrivateHost(h) {
+  if (['localhost', '127.0.0.1', '::1', '[::1]'].includes(h)) return true;
+  if (/\.local$/i.test(h) || /^[a-z0-9-]+$/i.test(h) && !/^\d+(\.\d+){3}$/.test(h) && !h.includes('.')) return true; // bare machine name like ALIENWARE
+  const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (!m) return false;
+  const a = +m[1], b = +m[2];
+  return a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 100 && b >= 64 && b <= 127);
+}
 function assertLocal(u) {
   const h = new URL(u).hostname;
-  if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(h)) {
-    console.error('Refusing to run: HERMES_URL must point at this computer (localhost). Got ' + h);
+  if (!isPrivateHost(h)) {
+    console.error('Refusing to run: HERMES_URL must be on this computer or your own network (192.168.x.x, 10.x.x.x, localhost, or a machine name). Got ' + h);
     process.exit(1);
   }
 }
