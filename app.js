@@ -3,7 +3,7 @@
   var CFG = window.PROSTACK_CONFIG, E = window.Engine;
   var sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey);
   var app = document.getElementById('app'), nav = document.getElementById('nav');
-  var S = { user: null, tab: 'plan', cards: [], profile: null, credit: null, apps: [], repay: null, consents: [], form: null, flash: null };
+  var S = { user: null, tab: 'plan', cards: [], profile: null, credit: null, apps: [], repay: null, consents: [], form: null, flash: null, isStaff: false };
   var CONSENTS = [
     ['terms', 'I agree to the terms of use and understand ProStack is a planning tool that does not apply for credit on my behalf or guarantee approval.'],
     ['credit_data', 'I agree to store the credit ranges and counts I enter here (never my SSN, full report, or card numbers) so ProStack can build my plan.'],
@@ -37,12 +37,13 @@
       sb.from('credit_profiles').select('*').eq('user_id', uid).maybeSingle(),
       sb.from('applications').select('*').order('created_at', { ascending: true }),
       sb.from('repayment_plans').select('*').order('created_at', { ascending: false }).limit(1),
-      sb.from('consents').select('*')
+      sb.from('consents').select('*'),
+      sb.from('staff').select('role').eq('user_id', uid).maybeSingle()
     ]).then(function (r) {
       for (var i = 0; i < r.length; i++) if (r[i].error) throw r[i].error;
       S.cards = (r[0].data || []).map(E.fromRow);
       S.profile = r[1].data; S.credit = r[2].data; S.apps = r[3].data || [];
-      S.repay = (r[4].data || [])[0] || null; S.consents = r[5].data || [];
+      S.repay = (r[4].data || [])[0] || null; S.consents = r[5].data || []; S.isStaff = !!r[6].data;
     });
   }
   function hasAllConsents() {
@@ -301,13 +302,67 @@
     };
   }
 
+
+  /* ---------- staff dashboard ---------- */
+  var CONF = [['high', 'high'], ['medium', 'medium'], ['low', 'low']];
+  function renderStaff() {
+    if (!S.isStaff) { S.tab = 'plan'; return render(); }
+    app.innerHTML = flashHtml() + '<div class="panel"><p>Loading dashboard…</p></div>';
+    Promise.all([
+      sb.rpc('staff_overview'),
+      sb.rpc('card_outcome_summary', { min_group: 5 }),
+      sb.from('cards').select('*').order('issuer').order('name')
+    ]).then(function (r) {
+      for (var i = 0; i < r.length; i++) if (r[i].error) throw r[i].error;
+      var o = r[0].data || {}, out = r[1].data || [], cat = r[2].data || [], st = o.by_status || {};
+      function tile(label, val) { return '<div class="panel" style="margin:0"><div class="sub" style="margin:0">' + esc(label) + '</div><div style="font:600 28px var(--serif)">' + esc(val == null ? 0 : val) + '</div></div>'; }
+      var decided = (st.approved || 0) + (st.denied || 0), rate = decided ? Math.round(100 * (st.approved || 0) / decided) + '%' : 'n/a';
+      var h = flashHtml() + '<div class="panel"><h2>Staff dashboard</h2><p class="sub">Counts only. Individual client records are never shown here.</p>' +
+        '<div class="grid">' + tile('Clients', o.clients) + tile('New this week', o.signups_7d) + tile('With a credit profile', o.with_credit_profile) +
+        tile('Applications tracked', o.applications) + tile('Planned', st.planned) + tile('Applied', st.applied) + tile('Approved', st.approved) + tile('Denied', st.denied) + tile('Approval rate (decided)', rate) + '</div></div>';
+      h += '<div class="panel"><h3>Outcomes by card and score band</h3><p class="sub">Groups with fewer than 5 decisions are hidden to protect privacy.</p>';
+      if (!out.length) h += '<p>Not enough decisions yet. Rows appear once a card and score band has 5 or more.</p>';
+      else {
+        h += '<div class="tablewrap"><table><thead><tr><th>Card</th><th>Score band</th><th>Decisions</th><th>Approved</th><th>Denied</th><th>Approval rate</th><th>Avg limit</th></tr></thead><tbody>' +
+          out.map(function (x) { return '<tr><td>' + esc(cardName(x.card_id)) + '</td><td>' + esc(x.score_band == null ? 'n/a' : x.score_band) + '</td><td>' + esc(x.decisions) + '</td><td>' + esc(x.approvals) + '</td><td>' + esc(x.denials) + '</td><td>' + (x.decisions ? Math.round(100 * x.approvals / x.decisions) + '%' : 'n/a') + '</td><td>' + (x.avg_limit == null ? 'n/a' : money(x.avg_limit)) + '</td></tr>'; }).join('') + '</tbody></table></div>';
+      }
+      h += '</div><div class="panel"><h3>Card catalog</h3><p class="sub">Edit terms as issuers change them. Update the source date whenever you verify. Inactive cards are hidden from clients.</p><div class="tablewrap"><table><thead><tr><th>Card</th><th>Fee</th><th>0% mo</th><th>APR text</th><th>Welcome offer</th><th>Conf.</th><th>Verified</th><th>Active</th><th></th></tr></thead><tbody id="catBody">' +
+        cat.map(function (c) {
+          return '<tr data-id="' + esc(c.id) + '"><td><b>' + esc(c.name) + '</b><div class="src">' + esc(c.issuer) + '</div></td>' +
+            '<td><input type="number" min="0" step="1" data-f="annual_fee" value="' + esc(c.annual_fee == null ? '' : c.annual_fee) + '" style="width:80px" aria-label="Annual fee"></td>' +
+            '<td><input type="number" min="0" max="36" step="1" data-f="intro_months" value="' + esc(c.intro_months == null ? '' : c.intro_months) + '" style="width:70px" aria-label="Intro months"></td>' +
+            '<td><input type="text" data-f="apr_text" value="' + esc(c.apr_text || '') + '" aria-label="APR text"></td>' +
+            '<td><input type="text" data-f="welcome_bonus" value="' + esc(c.welcome_bonus || '') + '" aria-label="Welcome offer"></td>' +
+            '<td><select data-f="confidence" aria-label="Confidence">' + opts(CONF, c.confidence) + '</select></td>' +
+            '<td><input type="text" data-f="source_date" value="' + esc(c.source_date || '') + '" style="width:90px" aria-label="Verified date"></td>' +
+            '<td><input type="checkbox" data-f="is_active"' + (c.is_active ? ' checked' : '') + ' aria-label="Active"></td>' +
+            '<td><button class="btn" data-act="save">Save</button></td></tr>';
+        }).join('') + '</tbody></table></div></div>';
+      app.innerHTML = h;
+      document.getElementById('catBody').addEventListener('click', function (e) {
+        if (e.target.dataset.act !== 'save') return;
+        var tr = e.target.closest('tr'), id = tr.dataset.id;
+        function f(k) { return tr.querySelector('[data-f=' + k + ']'); }
+        var fee = f('annual_fee').value, mo = f('intro_months').value;
+        var upd = { annual_fee: fee === '' ? null : Math.max(0, +fee), intro_months: mo === '' ? null : Math.max(0, Math.min(36, Math.round(+mo))),
+          apr_text: f('apr_text').value.trim() || null, welcome_bonus: f('welcome_bonus').value.trim() || null, confidence: f('confidence').value,
+          source_date: f('source_date').value.trim() || null, is_active: f('is_active').checked };
+        sb.from('cards').update(upd).eq('id', id).then(function (res) {
+          if (res.error) fail(res.error); else flash('ok', 'Saved ' + id + '.');
+          return loadAll();
+        }).then(function () { renderStaff(); });
+      });
+    }).catch(function (err) { fail(err); app.innerHTML = flashHtml() + '<div class="panel"><p>Could not load the dashboard.</p></div>'; });
+  }
+
   /* ---------- shell ---------- */
   function render() {
     if (!S.user) return renderAuth('signin');
     if (!hasAllConsents()) return renderConsent();
     nav.hidden = false;
+    nav.querySelector('[data-tab=staff]').hidden = !S.isStaff;
     Array.prototype.forEach.call(nav.querySelectorAll('button'), function (b) { b.setAttribute('aria-current', b.dataset.tab === S.tab ? 'page' : 'false'); });
-    ({ plan: renderPlan, tracker: renderTracker, repay: renderRepay, account: renderAccount }[S.tab] || renderPlan)();
+    ({ plan: renderPlan, tracker: renderTracker, repay: renderRepay, account: renderAccount, staff: renderStaff }[S.tab] || renderPlan)();
   }
   nav.addEventListener('click', function (e) { var t = e.target.dataset.tab; if (t) { S.tab = t; render(); window.scrollTo(0, 0); } });
 
