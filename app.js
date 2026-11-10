@@ -3,7 +3,7 @@
   var CFG = window.PROSTACK_CONFIG, E = window.Engine;
   var sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey);
   var app = document.getElementById('app'), nav = document.getElementById('nav');
-  var S = { user: null, tab: 'plan', cards: [], profile: null, credit: null, apps: [], repay: null, consents: [], form: null, flash: null, isStaff: false };
+  var S = { user: null, tab: 'plan', cards: [], profile: null, credit: null, apps: [], repay: null, consents: [], form: null, flash: null, isStaff: false, isAdmin: false };
   var CONSENTS = [
     ['terms', 'I agree to the terms of use and understand ProStack is a planning tool that does not apply for credit on my behalf or guarantee approval.'],
     ['credit_data', 'I agree to store the credit ranges and counts I enter here (never my SSN, full report, or card numbers) so ProStack can build my plan.'],
@@ -43,7 +43,7 @@
       for (var i = 0; i < r.length; i++) if (r[i].error) throw r[i].error;
       S.cards = (r[0].data || []).map(E.fromRow);
       S.profile = r[1].data; S.credit = r[2].data; S.apps = r[3].data || [];
-      S.repay = (r[4].data || [])[0] || null; S.consents = r[5].data || []; S.isStaff = !!r[6].data;
+      S.repay = (r[4].data || [])[0] || null; S.consents = r[5].data || []; S.isStaff = !!r[6].data; S.isAdmin = !!(r[6].data && r[6].data.role === 'admin');
     });
   }
   function hasAllConsents() {
@@ -305,19 +305,27 @@
 
   /* ---------- staff dashboard ---------- */
   var CONF = [['high', 'high'], ['medium', 'medium'], ['low', 'low']];
+  function numOrNull(v) { return v === '' || v == null ? null : Number(v); }
+  function rpcMsg(code) {
+    return { ok: 'Done.', no_such_user: 'No account with that email. They must sign up at the portal first.', cannot_remove_self: 'You cannot remove yourself.', cannot_demote_self: 'You cannot lower your own role.', not_found: 'That person is not staff.' }[code] || String(code);
+  }
   function renderStaff() {
     if (!S.isStaff) { S.tab = 'plan'; return render(); }
-    app.innerHTML = flashHtml() + '<div class="panel"><p>Loading dashboard…</p></div>';
+    var fl = flashHtml();
+    app.innerHTML = fl + '<div class="panel"><p>Loading dashboard…</p></div>';
+    var none = Promise.resolve({ data: [] });
     Promise.all([
       sb.rpc('staff_overview'),
       sb.rpc('card_outcome_summary', { min_group: 5 }),
-      sb.from('cards').select('*').order('issuer').order('name')
+      sb.from('cards').select('*').order('issuer').order('name'),
+      sb.from('issuer_rules').select('*').order('issuer').order('id'),
+      S.isAdmin ? sb.rpc('staff_list') : none
     ]).then(function (r) {
       for (var i = 0; i < r.length; i++) if (r[i].error) throw r[i].error;
-      var o = r[0].data || {}, out = r[1].data || [], cat = r[2].data || [], st = o.by_status || {};
+      var o = r[0].data || {}, out = r[1].data || [], cat = r[2].data || [], rules = r[3].data || [], team = r[4].data || [], st = o.by_status || {};
       function tile(label, val) { return '<div class="panel" style="margin:0"><div class="sub" style="margin:0">' + esc(label) + '</div><div style="font:600 28px var(--serif)">' + esc(val == null ? 0 : val) + '</div></div>'; }
       var decided = (st.approved || 0) + (st.denied || 0), rate = decided ? Math.round(100 * (st.approved || 0) / decided) + '%' : 'n/a';
-      var h = flashHtml() + '<div class="panel"><h2>Staff dashboard</h2><p class="sub">Counts only. Individual client records are never shown here.</p>' +
+      var h = fl + '<div class="panel"><h2>Staff dashboard</h2><p class="sub">Counts only. Individual client records are never shown here.</p>' +
         '<div class="grid">' + tile('Clients', o.clients) + tile('New this week', o.signups_7d) + tile('With a credit profile', o.with_credit_profile) +
         tile('Applications tracked', o.applications) + tile('Planned', st.planned) + tile('Applied', st.applied) + tile('Approved', st.approved) + tile('Denied', st.denied) + tile('Approval rate (decided)', rate) + '</div></div>';
       h += '<div class="panel"><h3>Outcomes by card and score band</h3><p class="sub">Groups with fewer than 5 decisions are hidden to protect privacy.</p>';
@@ -326,7 +334,8 @@
         h += '<div class="tablewrap"><table><thead><tr><th>Card</th><th>Score band</th><th>Decisions</th><th>Approved</th><th>Denied</th><th>Approval rate</th><th>Avg limit</th></tr></thead><tbody>' +
           out.map(function (x) { return '<tr><td>' + esc(cardName(x.card_id)) + '</td><td>' + esc(x.score_band == null ? 'n/a' : x.score_band) + '</td><td>' + esc(x.decisions) + '</td><td>' + esc(x.approvals) + '</td><td>' + esc(x.denials) + '</td><td>' + (x.decisions ? Math.round(100 * x.approvals / x.decisions) + '%' : 'n/a') + '</td><td>' + (x.avg_limit == null ? 'n/a' : money(x.avg_limit)) + '</td></tr>'; }).join('') + '</tbody></table></div>';
       }
-      h += '</div><div class="panel"><h3>Card catalog</h3><p class="sub">Edit terms as issuers change them. Update the source date whenever you verify. Inactive cards are hidden from clients.</p><div class="tablewrap"><table><thead><tr><th>Card</th><th>Fee</th><th>0% mo</th><th>APR text</th><th>Welcome offer</th><th>Conf.</th><th>Verified</th><th>Active</th><th></th></tr></thead><tbody id="catBody">' +
+      // catalog editor
+      h += '</div><div class="panel"><h3>Card catalog</h3><p class="sub">Edit terms as issuers change them. Update the verified date whenever you confirm them. Inactive cards are hidden from clients. Cards are never deleted; mark them inactive.</p><div class="tablewrap"><table><thead><tr><th>Card</th><th>Fee</th><th>0% mo</th><th>APR text</th><th>Welcome offer</th><th>Conf.</th><th>Verified</th><th>Active</th><th></th></tr></thead><tbody id="catBody">' +
         cat.map(function (c) {
           return '<tr data-id="' + esc(c.id) + '"><td><b>' + esc(c.name) + '</b><div class="src">' + esc(c.issuer) + '</div></td>' +
             '<td><input type="number" min="0" step="1" data-f="annual_fee" value="' + esc(c.annual_fee == null ? '' : c.annual_fee) + '" style="width:80px" aria-label="Annual fee"></td>' +
@@ -338,21 +347,134 @@
             '<td><input type="checkbox" data-f="is_active"' + (c.is_active ? ' checked' : '') + ' aria-label="Active"></td>' +
             '<td><button class="btn" data-act="save">Save</button></td></tr>';
         }).join('') + '</tbody></table></div></div>';
+      // add card
+      h += '<div class="panel"><h3>Add a card</h3><p class="sub">New cards appear in clients\' plans straight away. Use the issuer\'s published terms and set confidence honestly.</p><details><summary>Open the form</summary><form id="newCard" style="margin-top:12px"><div class="grid">' +
+        '<div class="field"><label for="nc_id">ID (lowercase letters, numbers, underscores)</label><input id="nc_id" type="text" pattern="[a-z0-9_]{3,60}" required></div>' +
+        '<div class="field"><label for="nc_issuer">Issuer</label><input id="nc_issuer" type="text" required></div>' +
+        '<div class="field"><label for="nc_name">Card name</label><input id="nc_name" type="text" required></div>' +
+        '<div class="field"><label for="nc_type">Type</label><select id="nc_type">' + opts([['credit', 'Credit'], ['charge', 'Charge (pay in full)']], 'credit') + '</select></div>' +
+        '<div class="field"><label for="nc_fee">Annual fee ($, blank if unknown)</label><input id="nc_fee" type="number" min="0" step="1"></div>' +
+        '<div class="field"><label for="nc_intro">0% intro months (0 = none, blank = unknown)</label><input id="nc_intro" type="number" min="0" max="36" step="1"></div>' +
+        '<div class="field"><label for="nc_aprlow">Regular APR low (%)</label><input id="nc_aprlow" type="number" min="0" max="99" step="0.01"></div>' +
+        '<div class="field"><label for="nc_aprhigh">Regular APR high (%)</label><input id="nc_aprhigh" type="number" min="0" max="99" step="0.01"></div>' +
+        '<div class="field"><label for="nc_aprtext">APR text</label><input id="nc_aprtext" type="text"></div>' +
+        '<div class="field"><label for="nc_rewards">Rewards</label><input id="nc_rewards" type="text"></div>' +
+        '<div class="field"><label for="nc_bonus">Welcome offer</label><input id="nc_bonus" type="text"></div>' +
+        '<div class="field"><label for="nc_tier">Approval tier (1 easier, 3 harder)</label><select id="nc_tier">' + opts([[1, '1'], [2, '2'], [3, '3']], 2) + '</select></div>' +
+        '<div class="field"><label for="nc_conf">Data confidence</label><select id="nc_conf">' + opts(CONF, 'medium') + '</select></div>' +
+        '<div class="field"><label for="nc_fit_financing">Fit for financing (0-5)</label><input id="nc_fit_financing" type="number" min="0" max="5" step="1" value="0"></div>' +
+        '<div class="field"><label for="nc_fit_cashback">Fit for cash back (0-5)</label><input id="nc_fit_cashback" type="number" min="0" max="5" step="1" value="0"></div>' +
+        '<div class="field"><label for="nc_fit_travel">Fit for travel (0-5)</label><input id="nc_fit_travel" type="number" min="0" max="5" step="1" value="0"></div>' +
+        '<div class="field"><label for="nc_src">Source URL (https://)</label><input id="nc_src" type="text"></div>' +
+        '<div class="field"><label for="nc_date">Verified date (e.g. 2026-11)</label><input id="nc_date" type="text"></div>' +
+        '</div><div class="field"><label for="nc_note">Note for clients</label><input id="nc_note" type="text"></div>' +
+        '<div class="check"><input type="checkbox" id="nc_introverify"><label for="nc_introverify" style="font-weight:400">The intro period needs verification</label></div>' +
+        '<div class="check"><input type="checkbox" id="nc_personal"><label for="nc_personal" style="font-weight:400">Can report to personal credit</label></div>' +
+        '<button class="btn" type="submit">Add card</button></form></details></div>';
+      // issuer rules
+      h += '<div class="panel"><h3>Issuer rules</h3><p class="sub">The reported rules shown with each card. Mark a rule inactive to hide it.</p><div class="tablewrap"><table><thead><tr><th>Issuer</th><th>Rule</th><th>Description</th><th>Applies to</th><th>Conf.</th><th>Active</th><th></th></tr></thead><tbody id="ruleBody">' +
+        rules.map(function (x) {
+          return '<tr data-id="' + esc(x.id) + '"><td>' + esc(x.issuer) + '</td><td>' + esc(x.rule_name) + '</td>' +
+            '<td><input type="text" data-f="description" value="' + esc(x.description) + '" aria-label="Description"></td>' +
+            '<td><input type="text" data-f="applies_to" value="' + esc(x.applies_to || '') + '" aria-label="Applies to"></td>' +
+            '<td><select data-f="confidence" aria-label="Confidence">' + opts(CONF, x.confidence) + '</select></td>' +
+            '<td><input type="checkbox" data-f="is_active"' + (x.is_active ? ' checked' : '') + ' aria-label="Active"></td>' +
+            '<td><button class="btn" data-act="save">Save</button></td></tr>';
+        }).join('') + '</tbody></table></div>' +
+        '<details style="margin-top:14px"><summary>Add a rule</summary><form id="newRule" style="margin-top:12px"><div class="grid">' +
+        '<div class="field"><label for="nr_issuer">Issuer</label><input id="nr_issuer" type="text" required></div>' +
+        '<div class="field"><label for="nr_name">Rule name</label><input id="nr_name" type="text" required></div>' +
+        '<div class="field"><label for="nr_applies">Applies to</label><input id="nr_applies" type="text"></div>' +
+        '<div class="field"><label for="nr_type">Rule type (published, unwritten, reported)</label><input id="nr_type" type="text"></div>' +
+        '<div class="field"><label for="nr_conf">Confidence</label><select id="nr_conf">' + opts(CONF, 'medium') + '</select></div>' +
+        '<div class="field"><label for="nr_src">Source URL</label><input id="nr_src" type="text"></div></div>' +
+        '<div class="field"><label for="nr_desc">Description</label><input id="nr_desc" type="text" required></div><button class="btn" type="submit">Add rule</button></form></details></div>';
+      // staff access (admins only)
+      if (S.isAdmin) {
+        h += '<div class="panel"><h3>Staff access</h3><p class="sub">Staff can see aggregate statistics and edit the catalog and rules. Admins can also manage staff. People must have signed up at the portal first. Every change is logged.</p>' +
+          '<div class="tablewrap"><table><thead><tr><th>Email</th><th>Role</th><th>Since</th><th></th></tr></thead><tbody id="teamBody">' +
+          team.map(function (m) {
+            var me = m.user_id === S.user.id;
+            return '<tr data-id="' + esc(m.user_id) + '"><td>' + esc(m.email) + (me ? ' (you)' : '') + '</td><td>' + esc(m.role) + '</td><td>' + esc(fmt(m.created_at)) + '</td><td class="row">' +
+              (me ? '' : '<button class="btn alt" data-act="role" data-email="' + esc(m.email) + '" data-role="' + (m.role === 'admin' ? 'analyst' : 'admin') + '">Make ' + (m.role === 'admin' ? 'analyst' : 'admin') + '</button><button class="btn danger" data-act="remove">Remove</button>') + '</td></tr>';
+          }).join('') + '</tbody></table></div>' +
+          '<form id="addStaff" class="row" style="margin-top:14px"><div class="field" style="margin:0"><label for="as_email">Email</label><input id="as_email" type="email" required></div>' +
+          '<div class="field" style="margin:0"><label for="as_role">Role</label><select id="as_role">' + opts([['analyst', 'Analyst'], ['admin', 'Admin']], 'analyst') + '</select></div>' +
+          '<button class="btn" type="submit" style="align-self:flex-end">Add staff</button></form></div>';
+      }
       app.innerHTML = h;
-      document.getElementById('catBody').addEventListener('click', function (e) {
-        if (e.target.dataset.act !== 'save') return;
-        var tr = e.target.closest('tr'), id = tr.dataset.id;
-        function f(k) { return tr.querySelector('[data-f=' + k + ']'); }
-        var fee = f('annual_fee').value, mo = f('intro_months').value;
-        var upd = { annual_fee: fee === '' ? null : Math.max(0, +fee), intro_months: mo === '' ? null : Math.max(0, Math.min(36, Math.round(+mo))),
-          apr_text: f('apr_text').value.trim() || null, welcome_bonus: f('welcome_bonus').value.trim() || null, confidence: f('confidence').value,
-          source_date: f('source_date').value.trim() || null, is_active: f('is_active').checked };
-        sb.from('cards').update(upd).eq('id', id).then(function (res) {
-          if (res.error) fail(res.error); else flash('ok', 'Saved ' + id + '.');
-          return loadAll();
-        }).then(function () { renderStaff(); });
-      });
+      wireStaff();
     }).catch(function (err) { fail(err); app.innerHTML = flashHtml() + '<div class="panel"><p>Could not load the dashboard.</p></div>'; });
+  }
+  function wireStaff() {
+    function done(res, okText) {
+      var err = res && res.error;
+      if (err) fail(err); else flash('ok', okText);
+      return loadAll().then(function () { renderStaff(); });
+    }
+    function afterRpc(res, okText) {
+      if (res.error) fail(res.error); else if (res.data !== 'ok') flash('err', rpcMsg(res.data)); else flash('ok', okText);
+      return loadAll().then(function () { renderStaff(); });
+    }
+    document.getElementById('catBody').addEventListener('click', function (e) {
+      if (e.target.dataset.act !== 'save') return;
+      var tr = e.target.closest('tr'), id = tr.dataset.id;
+      function f(k) { return tr.querySelector('[data-f=' + k + ']'); }
+      var fee = f('annual_fee').value, mo = f('intro_months').value;
+      var upd = { annual_fee: fee === '' ? null : Math.max(0, +fee), intro_months: mo === '' ? null : Math.max(0, Math.min(36, Math.round(+mo))),
+        apr_text: f('apr_text').value.trim() || null, welcome_bonus: f('welcome_bonus').value.trim() || null, confidence: f('confidence').value,
+        source_date: f('source_date').value.trim() || null, is_active: f('is_active').checked };
+      sb.from('cards').update(upd).eq('id', id).then(function (res) { return done(res, 'Saved ' + id + '.'); });
+    });
+    document.getElementById('newCard').onsubmit = function (e) {
+      e.preventDefault();
+      function v(i) { return document.getElementById('nc_' + i).value.trim(); }
+      var id = v('id');
+      if (!/^[a-z0-9_]{3,60}$/.test(id)) { flash('err', 'ID must be 3 to 60 lowercase letters, numbers or underscores.'); return renderStaff(); }
+      if (S.cards.some(function (c) { return c.id === id; })) { flash('err', 'A card with that ID already exists.'); return renderStaff(); }
+      var src = v('src'); if (src && !/^https?:\/\//.test(src)) { flash('err', 'Source URL must start with http:// or https://'); return renderStaff(); }
+      function fit(k) { return Math.max(0, Math.min(5, Math.round(+document.getElementById('nc_fit_' + k).value || 0))); }
+      var intro = numOrNull(v('intro'));
+      var row = { id: id, issuer: v('issuer'), name: v('name'), card_type: v('type'), annual_fee: numOrNull(v('fee')),
+        intro_months: intro == null ? null : Math.max(0, Math.min(36, Math.round(intro))), intro_verify: document.getElementById('nc_introverify').checked,
+        apr_low: numOrNull(v('aprlow')), apr_high: numOrNull(v('aprhigh')), apr_text: v('aprtext') || null, rewards: v('rewards') || null, welcome_bonus: v('bonus') || null,
+        tier: +v('tier'), confidence: v('conf'), reports_personal: document.getElementById('nc_personal').checked,
+        goal_fit: { financing: fit('financing'), cashback: fit('cashback'), travel: fit('travel') }, note: v('note') || null, source_url: src || null, source_date: v('date') || null, is_active: true };
+      sb.from('cards').insert(row).then(function (res) { return done(res, 'Added ' + row.name + '.'); });
+    };
+    document.getElementById('ruleBody').addEventListener('click', function (e) {
+      if (e.target.dataset.act !== 'save') return;
+      var tr = e.target.closest('tr'), id = tr.dataset.id;
+      function f(k) { return tr.querySelector('[data-f=' + k + ']'); }
+      var desc = f('description').value.trim();
+      if (!desc) { flash('err', 'Description cannot be empty.'); return renderStaff(); }
+      sb.from('issuer_rules').update({ description: desc, applies_to: f('applies_to').value.trim() || null, confidence: f('confidence').value, is_active: f('is_active').checked }).eq('id', id)
+        .then(function (res) { return done(res, 'Rule saved.'); });
+    });
+    document.getElementById('newRule').onsubmit = function (e) {
+      e.preventDefault();
+      function v(i) { return document.getElementById('nr_' + i).value.trim(); }
+      var src = v('src'); if (src && !/^https?:\/\//.test(src)) { flash('err', 'Source URL must start with http:// or https://'); return renderStaff(); }
+      sb.from('issuer_rules').insert({ issuer: v('issuer'), rule_name: v('name'), description: v('desc'), applies_to: v('applies') || null, rule_type: v('type') || null, confidence: v('conf'), source_url: src || null })
+        .then(function (res) { return done(res, 'Rule added.'); });
+    };
+    var tb = document.getElementById('teamBody');
+    if (tb) {
+      tb.addEventListener('click', function (e) {
+        var act = e.target.dataset.act; if (!act) return;
+        var tr = e.target.closest('tr');
+        if (act === 'role') return sb.rpc('staff_add', { target_email: e.target.dataset.email, target_role: e.target.dataset.role }).then(function (res) { return afterRpc(res, 'Role changed.'); });
+        if (act === 'remove') {
+          if (!window.confirm('Remove this person from staff?')) return;
+          sb.rpc('staff_remove', { target: tr.dataset.id }).then(function (res) { return afterRpc(res, 'Removed from staff.'); });
+        }
+      });
+      document.getElementById('addStaff').onsubmit = function (e) {
+        e.preventDefault();
+        var em = document.getElementById('as_email').value.trim(), role = document.getElementById('as_role').value;
+        sb.rpc('staff_add', { target_email: em, target_role: role }).then(function (res) { return afterRpc(res, em + ' is now ' + role + '.'); });
+      };
+    }
   }
 
   /* ---------- shell ---------- */
