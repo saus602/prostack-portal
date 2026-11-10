@@ -319,10 +319,11 @@
       sb.rpc('card_outcome_summary', { min_group: 5 }),
       sb.from('cards').select('*').order('issuer').order('name'),
       sb.from('issuer_rules').select('*').order('issuer').order('id'),
-      S.isAdmin ? sb.rpc('staff_list') : none
+      S.isAdmin ? sb.rpc('staff_list') : none,
+      sb.from('catalog_proposals').select('*').eq('status', 'pending').order('created_at', { ascending: false }).limit(50)
     ]).then(function (r) {
       for (var i = 0; i < r.length; i++) if (r[i].error) throw r[i].error;
-      var o = r[0].data || {}, out = r[1].data || [], cat = r[2].data || [], rules = r[3].data || [], team = r[4].data || [], st = o.by_status || {};
+      var o = r[0].data || {}, out = r[1].data || [], cat = r[2].data || [], rules = r[3].data || [], team = r[4].data || [], props = r[5].data || [], st = o.by_status || {};
       function tile(label, val) { return '<div class="panel" style="margin:0"><div class="sub" style="margin:0">' + esc(label) + '</div><div style="font:600 28px var(--serif)">' + esc(val == null ? 0 : val) + '</div></div>'; }
       var decided = (st.approved || 0) + (st.denied || 0), rate = decided ? Math.round(100 * (st.approved || 0) / decided) + '%' : 'n/a';
       var h = fl + '<div class="panel"><h2>Staff dashboard</h2><p class="sub">Counts only. Individual client records are never shown here.</p>' +
@@ -334,6 +335,16 @@
         h += '<div class="tablewrap"><table><thead><tr><th>Card</th><th>Score band</th><th>Decisions</th><th>Approved</th><th>Denied</th><th>Approval rate</th><th>Avg limit</th></tr></thead><tbody>' +
           out.map(function (x) { return '<tr><td>' + esc(cardName(x.card_id)) + '</td><td>' + esc(x.score_band == null ? 'n/a' : x.score_band) + '</td><td>' + esc(x.decisions) + '</td><td>' + esc(x.approvals) + '</td><td>' + esc(x.denials) + '</td><td>' + (x.decisions ? Math.round(100 * x.approvals / x.decisions) + '%' : 'n/a') + '</td><td>' + (x.avg_limit == null ? 'n/a' : money(x.avg_limit)) + '</td></tr>'; }).join('') + '</tbody></table></div>';
       }
+      // proposals from the local checker
+      h += '</div><div class="panel"><h3>Proposed catalog changes</h3><p class="sub">Filed by the checker that runs on your own computer with your local Hermes model. Nothing changes until you approve. Read the evidence before approving: a local model can misread a page.</p>';
+      if (!props.length) h += '<p>No proposals waiting.</p>';
+      else h += '<div class="tablewrap"><table><thead><tr><th>Card</th><th>Proposed change</th><th>Evidence</th><th>Filed</th><th></th></tr></thead><tbody id="propBody">' +
+        props.map(function (p) {
+          var cur = null; for (var i = 0; i < cat.length; i++) if (cat[i].id === p.card_id) cur = cat[i];
+          var diff = Object.keys(p.changes || {}).map(function (k) { return '<div><b>' + esc(k) + '</b>: ' + esc(cur && cur[k] != null ? cur[k] : 'none') + ' \u2192 ' + esc(p.changes[k]) + '</div>'; }).join('');
+          return '<tr data-id="' + esc(p.id) + '"><td><b>' + esc(cardName(p.card_id)) + '</b><div class="src">' + esc(p.model || '') + '</div></td><td>' + diff + '</td><td class="src">' + esc(p.evidence || '') + '</td><td>' + esc(fmt(p.created_at)) + '</td>' +
+            '<td class="row"><button class="btn" data-act="approve">Approve</button><button class="btn alt" data-act="reject">Reject</button></td></tr>';
+        }).join('') + '</tbody></table></div>';
       // catalog editor
       h += '</div><div class="panel"><h3>Card catalog</h3><p class="sub">Edit terms as issuers change them. Update the verified date whenever you confirm them. Inactive cards are hidden from clients. Cards are never deleted; mark them inactive.</p><div class="tablewrap"><table><thead><tr><th>Card</th><th>Fee</th><th>0% mo</th><th>APR text</th><th>Welcome offer</th><th>Conf.</th><th>Verified</th><th>Active</th><th></th></tr></thead><tbody id="catBody">' +
         cat.map(function (c) {
@@ -416,6 +427,17 @@
       if (res.error) fail(res.error); else if (res.data !== 'ok') flash('err', rpcMsg(res.data)); else flash('ok', okText);
       return loadAll().then(function () { renderStaff(); });
     }
+    var pb = document.getElementById('propBody');
+    if (pb) pb.addEventListener('click', function (e) {
+      var act = e.target.dataset.act; if (act !== 'approve' && act !== 'reject') return;
+      var id = e.target.closest('tr').dataset.id;
+      sb.rpc('staff_review_proposal', { p_id: +id, p_action: act }).then(function (res) {
+        if (res.error) fail(res.error);
+        else if (res.data !== 'ok') flash('err', { bad_field: 'That proposal has a field that cannot be changed this way.', already_reviewed: 'Someone already reviewed that one.', not_found: 'That proposal no longer exists.' }[res.data] || String(res.data));
+        else flash('ok', act === 'approve' ? 'Approved. The catalog is updated.' : 'Rejected.');
+        return loadAll().then(function () { renderStaff(); });
+      });
+    });
     document.getElementById('catBody').addEventListener('click', function (e) {
       if (e.target.dataset.act !== 'save') return;
       var tr = e.target.closest('tr'), id = tr.dataset.id;
