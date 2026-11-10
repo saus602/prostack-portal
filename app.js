@@ -166,9 +166,9 @@
     else {
       h += '<ol class="steps">' + plan.map(function (s, i) {
         var c = s.e.card, extra = (S.form.goal === 'financing' && c.intro) ? ' · 0% for ' + c.intro + ' months' : '';
-        return '<li><span class="when">' + (i === 0 ? 'Start ' : 'After ') + fmt(s.date.toISOString().slice(0, 10)) + '</span><div><b>' + esc(c.issuer + ' ' + c.name) + '</b><br><span class="pill ' + s.e.lik + '">' + esc(E.LABEL[s.e.lik]) + '</span>' + esc(extra) + '</div></li>';
+        return '<li><span class="when">' + (i === 0 ? 'Start ' : 'After ') + fmt(s.date.toISOString().slice(0, 10)) + '</span><div><b>' + esc(c.issuer + ' ' + c.name) + '</b><br><span class="pill ' + s.e.lik + '">' + esc(E.LABEL[s.e.lik]) + '</span>' + esc(extra) + ' <span class="src">· ' + esc(E.INQ_LABEL[c.inq] || E.INQ_LABEL.unknown) + '</span></div></li>';
       }).join('') + '</ol><div class="row" style="margin-top:12px"><button class="btn" id="addPlan">Add this plan to my tracker</button></div>' +
-        '<div class="callout">Check your actual credit report for new accounts and inquiries before each step. If a card is denied, stop and review the reason before applying elsewhere. Each denial costs a hard inquiry.</div>';
+        '<div class="callout"><b>Cut down on hard inquiries.</b> Before each step, look for a soft-pull pre-approval. Capital One offers one for business cards. Experian\'s "No Ding Decline" label, found in Experian\'s own card offers, limits the damage of a decline on certain personal cards; Experian does not say it covers business cards, so ask the issuer. ProStack is not affiliated with Experian. A pre-approval is not a guarantee, and applying still triggers a hard pull.</div><div class="callout">Check your actual credit report for new accounts and inquiries before each step. If a card is denied, stop and review the reason before applying elsewhere. Each denial costs a hard inquiry.</div>';
     }
     h += '</div>';
     [['Ready to consider', ['likely', 'possible']], ['Reach', ['reach', 'unlikely']], ['On hold', ['hold']]].forEach(function (g) {
@@ -177,7 +177,7 @@
       h += '<div class="panel"><h3>' + g[0] + ' (' + list.length + ')</h3>' + list.map(function (e) {
         var c = e.card;
         return '<article class="cardrow"><div class="issuer">' + esc(c.issuer) + '</div><h4>' + esc(c.name) + ' <span class="pill ' + e.lik + '">' + esc(E.LABEL[e.lik]) + '</span></h4>' +
-          '<div class="facts-line"><span>Annual fee <b>' + feeText(c) + '</b></span><span>0% intro <b>' + introText(c) + '</b></span><span>Rewards <b>' + esc(c.rewards) + '</b></span></div>' +
+          '<div class="facts-line"><span>Annual fee <b>' + feeText(c) + '</b></span><span>0% intro <b>' + introText(c) + '</b></span><span>Rewards <b>' + esc(c.rewards) + '</b></span><span>Credit check <b>' + esc(E.INQ_LABEL[c.inq] || E.INQ_LABEL.unknown) + '</b></span></div>' +
           '<ul class="reasons">' + e.flags.map(function (x) { return '<li class="' + esc(x.level) + '">' + esc(x.text) + '</li>'; }).join('') + '</ul>' +
           '<div class="src">Data confidence: ' + esc(c.conf) + '. ' + esc(c.note) + ' ' + (/^https?:\/\//.test(c.src) ? '<a href="' + esc(c.src) + '" target="_blank" rel="noopener noreferrer">Source</a>' : '') + '</div></article>';
       }).join('') + '</div>';

@@ -16,6 +16,7 @@
       bonus: r.welcome_bonus || 'Not confirmed', tier: Number(r.tier), conf: r.confidence,
       fit: r.goal_fit || {}, reportsPersonal: !!r.reports_personal,
       bofa: r.issuer === 'Bank of America', usb: r.issuer === 'U.S. Bank',
+      inq: r.inquiry_path || 'unknown', inqNote: r.inquiry_note || '',
       note: r.note || '', src: r.source_url || '', date: r.source_date || ''
     };
   }
@@ -68,8 +69,10 @@
       if (warns >= 2) lik = down(down(lik)); else if (warns === 1 && lik === 'likely') lik = 'possible';
       if (p.biz === 'none') lik = down(lik);
     }
+    var softPath = c.inq === 'prequal_soft' || c.inq === 'soft_only' || c.inq === 'no_personal_check';
+    if (softPath) add('info', c.inqNote || 'A soft-pull or no-credit-check path is available.');
     var confBonus = { high: 1, medium: 0.5, low: 0 }[c.conf];
-    var rank = ((c.fit && c.fit[p.goal]) || 0) * 2 + RANK[lik] + confBonus;
+    var rank = ((c.fit && c.fit[p.goal]) || 0) * 2 + RANK[lik] + confBonus + (softPath && lik !== 'hold' ? 0.5 : 0);
     return { card: c, lik: lik, flags: flags, rank: rank };
   }
 
@@ -125,7 +128,8 @@
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
 
-  var api = { LABEL: LABEL, fromRow: fromRow, evaluate: evaluate, buildPlan: buildPlan, simulate: simulate,
+  var INQ_LABEL = { prequal_soft: 'Soft-pull pre-approval available', soft_only: 'Soft-pull credit check', no_personal_check: 'No personal credit check', hard: 'Hard inquiry on application', unknown: 'Hard inquiry likely (not confirmed)' };
+  var api = { INQ_LABEL: INQ_LABEL, LABEL: LABEL, fromRow: fromRow, evaluate: evaluate, buildPlan: buildPlan, simulate: simulate,
     bizFromDate: bizFromDate, dateFromBiz: dateFromBiz, addDays: addDays, addMonths: addMonths };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;
