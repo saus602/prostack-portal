@@ -287,7 +287,36 @@
       h += '</tbody></table></div>';
     }
     h += '</div>';
+    var up = Advisor.upcoming(S.apps.filter(function (a) { return a.status === 'approved' && a.intro_ends_on; }).map(function (a) { return { card: cardName(a.card_id), ends: a.intro_ends_on }; }));
+    if (up.length) {
+      h += '<div class="panel"><h2>Upcoming 0% endings</h2><p class="sub">Dates are estimates from your approval date. Confirm on your statement.</p><ul>' +
+        up.map(function (u) { return '<li><b>' + esc(u.card) + '</b>: ' + esc(fmt(u.ends)) + ' (' + (u.days < 0 ? 'ended' : u.days === 0 ? 'today' : u.days + ' days') + ')</li>'; }).join('') +
+        '</ul><button class="btn" id="icsBtn">Download calendar reminders (.ics)</button><p class="src">Adds reminders 30 and 7 days before each date. The file is made in your browser.</p></div>';
+    }
+    var den = S.apps.filter(function (a) { return a.status === 'denied'; });
+    if (den.length) {
+      h += '<div class="panel"><h2>Understand a denial letter</h2><p class="sub">Paste the reasons from your letter. This runs in your browser; the text is not saved or sent anywhere. It cannot promise a reconsideration will succeed.</p>' +
+        '<label>Which application<select id="dl_app">' + den.map(function (a) { return '<option value="' + esc(a.id) + '">' + esc(cardName(a.card_id)) + '</option>'; }).join('') + '</select></label>' +
+        '<label>Letter text<textarea id="dl_text" rows="5" maxlength="6000"></textarea></label>' +
+        '<div class="row"><button class="btn" id="dl_go">Read it</button></div><div id="dl_out"></div></div>';
+    }
     app.innerHTML = h;
+    var ib = document.getElementById('icsBtn');
+    if (ib) ib.addEventListener('click', function () {
+      var blob = new Blob([Advisor.buildIcs(up)], { type: 'text/calendar' }), u = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = u; a.download = 'prostack-reminders.ics'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(u); }, 1000);
+    });
+    var dg = document.getElementById('dl_go');
+    if (dg) dg.addEventListener('click', function () {
+      var r = Advisor.readDenial(document.getElementById('dl_text').value), out = document.getElementById('dl_out');
+      if (!r.reasons.length) { out.innerHTML = '<p>' + esc(Advisor.NO_MATCH) + '</p>'; return; }
+      out.innerHTML = '<ul>' + r.reasons.map(function (x) { return '<li><b>' + esc(x.label) + '.</b> ' + esc(x.next) + '</li>'; }).join('') + '</ul>' +
+        '<p class="src">You can call the issuer and ask for a second look. Results vary and approval is never guaranteed.</p><button class="btn alt" id="dl_use">Put reasons in my notes</button>';
+      document.getElementById('dl_use').addEventListener('click', function () {
+        var tr = app.querySelector('tr[data-id="' + document.getElementById('dl_app').value + '"]');
+        if (tr) { tr.querySelector('[data-f=denial_reason]').value = r.summary; out.insertAdjacentHTML('beforeend', '<p class="msg ok" role="status">Added to the notes. Press Save on that row to keep it.</p>'); }
+      });
+    });
     var tbody = app.querySelector('tbody'); if (!tbody) return;
     tbody.addEventListener('change', function (e) {
       if (e.target.dataset.f !== 'status') return;
