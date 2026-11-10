@@ -5,7 +5,7 @@
   var app = document.getElementById('app'), nav = document.getElementById('nav');
   var S = { user: null, tab: 'plan', cards: [], profile: null, credit: null, apps: [], repay: null, consents: [], form: null, flash: null, isStaff: false, isAdmin: false };
   var CONSENTS = [
-    ['terms', 'I agree to the terms of use and understand ProStack is a planning tool that does not apply for credit on my behalf or guarantee approval.'],
+    ['terms', 'I have read the terms of use (terms.html) and privacy summary (privacy.html), agree to them, and understand ProStack is a planning tool that does not apply for credit on my behalf or guarantee approval.'],
     ['credit_data', 'I agree to store the credit ranges and counts I enter here (never my SSN, full report, or card numbers) so ProStack can build my plan.'],
     ['estimates_notice', 'I understand odds, dates and card terms are estimates from public sources and may be wrong or out of date.'],
     ['affiliate_disclosure', 'I understand ProStack may earn referral fees from some issuers if I apply through a ProStack link. Any such link will be marked.']
