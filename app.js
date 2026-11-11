@@ -267,6 +267,7 @@
         });
         document.getElementById('imp_use').onclick = function () {
           var sm = window.Importer.summarize(S.imp.accounts);
+          sb.from('credit_data_log').insert({ user_id: S.user.id, kind: 'browser_import', consent_version: CFG.consentVersion }).then(function () {}, function () {});
           S.form.new24 = sm.new24; S.form.amexHeld = sm.amexHeld; S.form.amex90 = sm.amex90;
           if (S.imp.score) S.form.score = window.Importer.bandFor(S.imp.score);
           S.imp = null; S.impMsg = ''; flash('ok', 'Filled in from your report. The report itself was not kept. Review the numbers, then press Save profile.');
