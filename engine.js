@@ -76,6 +76,67 @@
     return { card: c, lik: lik, flags: flags, rank: rank };
   }
 
+
+  // Pacing constraints (days). Same-issuer gaps follow the reported issuer rules in the rules table.
+  var GLOBAL_GAP = 14;
+  var SAME_ISSUER_GAP = { 'Chase': 30, 'Citi': 95, 'Capital One': 180, 'Barclays': 180, 'Wells Fargo': 180, 'Bank of America': 60, 'U.S. Bank': 60 };
+  function earliestFor(issuer, date, out) {
+    var prior = out.filter(function (x) { return x.e.card.issuer === issuer; });
+    if (prior.length) {
+      var gap = SAME_ISSUER_GAP[issuer] || 30;
+      date = new Date(Math.max(date.getTime(), addDays(prior[prior.length - 1].date, gap).getTime()));
+    }
+    if (issuer === 'American Express') { // never a third Amex card inside 90 days
+      var am = prior.map(function (x) { return x.date; });
+      if (am.length >= 2) date = new Date(Math.max(date.getTime(), addDays(am[am.length - 2], 91).getTime()));
+    }
+    return date;
+  }
+  // Returns a list of violated constraints; an empty list means the plan respects every pacing rule.
+  function checkPlan(plan) {
+    var bad = [];
+    for (var i = 0; i < plan.length; i++) {
+      for (var j = 0; j < i; j++) {
+        var a = plan[j], b = plan[i], days = Math.round((b.date - a.date) / 86400000);
+        if (i - j === 1 && days < GLOBAL_GAP) bad.push('gap<' + GLOBAL_GAP + ' between steps ' + (j + 1) + ' and ' + (i + 1));
+        if (a.e.card.issuer === b.e.card.issuer && days < (SAME_ISSUER_GAP[a.e.card.issuer] || 30)) bad.push(a.e.card.issuer + ' same-issuer gap');
+      }
+      if (plan[i].e.card.issuer === 'American Express') {
+        var inWin = plan.slice(0, i + 1).filter(function (x) { return x.e.card.issuer === 'American Express' && (plan[i].date - x.date) / 86400000 <= 90; }).length;
+        if (inWin > 2) bad.push('3 Amex inside 90 days');
+      }
+    }
+    return bad;
+  }
+  // Fold in the client's own issuer pre-approval results: map card id -> 'approved' | 'not_shown' | 'unavailable'
+  function applyPrequal(evals, map) {
+    return evals.map(function (e) {
+      var r = map && map[e.card.id];
+      if (r === 'not_shown' && (e.lik === 'likely' || e.lik === 'possible')) {
+        var flags = e.flags.concat([{ level: 'warn', text: 'The issuer did not show you a pre-approval. Consider waiting or choosing another card.' }]);
+        return Object.assign({}, e, { lik: 'reach', flags: flags, rank: e.rank - 2 });
+      }
+      if (r === 'approved') return Object.assign({}, e, { flags: e.flags.concat([{ level: 'info', text: 'The issuer showed you a pre-approval (not a guarantee).' }]), rank: e.rank + 1 });
+      return e;
+    });
+  }
+  // Readiness 0-100 with the single biggest blocker named. Rule-based, not a statistical model.
+  function readiness(p, x) {
+    x = x || {};
+    var items = [];
+    var scorePts = p.score >= 760 ? 35 : p.score >= 720 ? 30 : p.score >= 680 ? 24 : p.score >= 640 ? 14 : 6;
+    items.push({ lost: 35 - scorePts, text: 'Raise your credit score range before applying. Pay balances down and fix any report errors.' });
+    var n = p.new24 || 0, newPts = n <= 1 ? 20 : n <= 3 ? 14 : n <= 4 ? 8 : 2;
+    items.push({ lost: 20 - newPts, text: 'You opened ' + n + ' accounts in 24 months. Several issuers react to that. Space out new accounts.' });
+    var bizPts = p.biz === '24plus' ? 15 : p.biz === '6to24' ? 11 : 5;
+    items.push({ lost: 15 - bizPts, text: 'A younger business lowers odds. Some issuers prefer a longer history.' });
+    items.push({ lost: x.hasDocs ? 0 : 15, text: 'Gather revenue records (bank statements, invoices or returns) before you apply.' });
+    items.push({ lost: x.pending ? 10 : 0, text: 'Wait for ' + (x.pending || 0) + ' pending application(s) to be decided before applying again.' });
+    items.push({ lost: x.recentDenial ? 5 : 0, text: 'You were denied recently. Read the reason and fix it before another application.' });
+    var lost = items.reduce(function (a, b) { return a + b.lost; }, 0), top = items.slice().sort(function (a, b) { return b.lost - a.lost; })[0];
+    return { score: Math.max(0, 100 - lost), blocker: top.lost > 0 ? top.text : null };
+  }
+
   function buildPlan(evals, p, start) {
     var cand = evals.filter(function (e) { return (e.lik === 'likely' || e.lik === 'possible') && ((e.card.fit && e.card.fit[p.goal]) || 0) > 0; })
       .sort(function (a, b) { return b.rank - a.rank; });
@@ -88,15 +149,10 @@
       oa = oa == null ? 5 : oa; ob = ob == null ? 5 : ob;
       return oa - ob || b.rank - a.rank;
     });
-    var d = start || new Date(), out = [], last = {};
+    var d = start || new Date(), out = [];
     picked.forEach(function (e, i) {
-      var date;
-      if (i === 0) date = new Date(d.getTime());
-      else {
-        date = addDays(out[i - 1].date, 14);
-        if (last[e.card.issuer]) date = new Date(Math.max(date.getTime(), addDays(last[e.card.issuer], 30).getTime()));
-      }
-      last[e.card.issuer] = date;
+      var date = i === 0 ? new Date(d.getTime()) : addDays(out[i - 1].date, GLOBAL_GAP);
+      date = earliestFor(e.card.issuer, date, out);
       out.push({ e: e, date: date });
     });
     return out;
@@ -129,7 +185,7 @@
   }
 
   var INQ_LABEL = { prequal_soft: 'Soft-pull pre-approval available', soft_only: 'Soft-pull credit check', no_personal_check: 'No personal credit check', hard: 'Hard inquiry on application', unknown: 'Hard inquiry likely (not confirmed)' };
-  var api = { INQ_LABEL: INQ_LABEL, LABEL: LABEL, fromRow: fromRow, evaluate: evaluate, buildPlan: buildPlan, simulate: simulate,
+  var api = { INQ_LABEL: INQ_LABEL, LABEL: LABEL, fromRow: fromRow, evaluate: evaluate, buildPlan: buildPlan, checkPlan: checkPlan, applyPrequal: applyPrequal, readiness: readiness, simulate: simulate,
     bizFromDate: bizFromDate, dateFromBiz: dateFromBiz, addDays: addDays, addMonths: addMonths };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Engine = api;

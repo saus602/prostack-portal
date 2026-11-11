@@ -38,12 +38,14 @@
       sb.from('applications').select('*').order('created_at', { ascending: true }),
       sb.from('repayment_plans').select('*').order('created_at', { ascending: false }).limit(1),
       sb.from('consents').select('*'),
-      sb.from('staff').select('role').eq('user_id', uid).maybeSingle()
+      sb.from('staff').select('role').eq('user_id', uid).maybeSingle(),
+      sb.from('business_verification').select('*').eq('user_id', uid).maybeSingle(),
+      sb.from('prequal_results').select('card_id,result,id').order('id', { ascending: true })
     ]).then(function (r) {
       for (var i = 0; i < r.length; i++) if (r[i].error) throw r[i].error;
       S.cards = (r[0].data || []).map(E.fromRow);
       S.profile = r[1].data; S.credit = r[2].data; S.apps = r[3].data || [];
-      S.repay = (r[4].data || [])[0] || null; S.consents = r[5].data || []; S.isStaff = !!r[6].data; S.isAdmin = !!(r[6].data && r[6].data.role === 'admin');
+      S.repay = (r[4].data || [])[0] || null; S.consents = r[5].data || []; S.isStaff = !!r[6].data; S.isAdmin = !!(r[6].data && r[6].data.role === 'admin'); S.bv = r[7].data || null; S.pq = {}; (r[8].data || []).forEach(function (x) { S.pq[x.card_id] = x.result; });
     });
   }
   function hasAllConsents() {
@@ -120,9 +122,35 @@
   }
 
   /* ---------- plan ---------- */
+  var ATTEST_V = 'v1', ATTEST_TXT = 'I confirm that my business is real, that the details I give ProStack and any issuer are true, and that I will not overstate income or revenue on any application. I understand I apply directly and ProStack cannot guarantee approval.';
+  function renderGate() {
+    app.innerHTML = flashHtml() + '<div class="panel"><h2>Confirm your business first</h2><p class="sub">ProStack plans business cards only, and every application needs a real, documented business. We store these answers, not your EIN or SSN.</p>' +
+      '<form id="bvf"><div class="grid">' +
+      '<div class="field"><label for="bv_type">Business type</label><select id="bv_type">' + opts([['sole_proprietor', 'Sole proprietor'], ['llc', 'LLC'], ['corporation', 'Corporation'], ['partnership', 'Partnership'], ['other', 'Other']], 'llc') + '</select></div>' +
+      '<div class="field"><label for="bv_tax">Tax ID you will use on applications</label><select id="bv_tax">' + opts([['ein', 'EIN'], ['ssn', 'SSN (sole proprietor)']], 'ein') + '</select></div>' +
+      '<div class="field"><label for="bv_start">Date the business started</label><input id="bv_start" type="date" required max="' + esc(today()) + '"></div></div>' +
+      '<label class="row"><input type="checkbox" id="bv_docs"> I can show revenue records (bank statements, invoices or tax returns)</label>' +
+      '<h3>Documents issuers often ask for</h3><ul><li>Business name, address and phone that match your registration</li><li>EIN letter or SSN, as applicable</li><li>Recent business bank statements</li><li>Proof of revenue or income you will state on the application</li></ul>' +
+      '<label class="row"><input type="checkbox" id="bv_ok" required> ' + esc(ATTEST_TXT) + '</label>' +
+      '<div class="row"><button class="btn" id="bv_go" type="submit" disabled>Confirm and continue</button></div></form></div>';
+    var ok = document.getElementById('bv_ok'), go = document.getElementById('bv_go');
+    ok.addEventListener('change', function () { go.disabled = !ok.checked; });
+    document.getElementById('bvf').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var st = document.getElementById('bv_start').value; if (!st || !ok.checked) return;
+      var uid = S.user.id;
+      sb.from('business_verification').upsert({ user_id: uid, entity_type: document.getElementById('bv_type').value, tax_id_path: document.getElementById('bv_tax').value,
+        business_started_on: st, has_revenue_docs: document.getElementById('bv_docs').checked, updated_at: new Date().toISOString() }).then(function (r) {
+        if (r.error) throw r.error;
+        return sb.from('attestations').insert({ user_id: uid, version: ATTEST_V, statement: ATTEST_TXT });
+      }).then(function (r) { if (r.error) throw r.error; return loadAll(); }).then(function () { flash('ok', 'Thanks. Your plan is ready.'); render(); })
+        .catch(function (err) { fail(err); renderGate(); });
+    });
+  }
   function renderPlan() {
+    if (!S.isStaff && !S.bv) return renderGate();
     var f = S.form, p = profileForEngine();
-    var evals = S.cards.map(function (c) { return E.evaluate(c, p); }).sort(function (a, b) { return b.rank - a.rank; });
+    var evals = E.applyPrequal(S.cards.map(function (c) { return E.evaluate(c, p); }), S.pq).sort(function (a, b) { return b.rank - a.rank; });
     var plan = E.buildPlan(evals, p);
     var h0 = flashHtml();
     var h = '<div class="panel"><h2>Your profile</h2><p class="sub">Ranges and counts only. Never enter your SSN, card numbers, or bureau logins. You can fill in the counts from your own Experian report below.</p><form id="pf">' +
@@ -161,12 +189,16 @@
     }
     hp += '</details>';
     h = h0 + hp + h;
+    var rd = E.readiness(p, { hasDocs: S.bv && S.bv.has_revenue_docs, pending: S.apps.filter(function (a) { return a.status === 'applied'; }).length,
+      recentDenial: S.apps.some(function (a) { return a.status === 'denied' && a.decided_on && (new Date() - new Date(a.decided_on + 'T00:00:00')) / 86400000 < 30; }) });
+    h += '<div class="panel"><h2>Readiness: ' + rd.score + ' / 100</h2><p class="sub">A simple checklist score, not a prediction of approval.</p>' + (rd.blocker ? '<p><b>Biggest blocker:</b> ' + esc(rd.blocker) + '</p>' : '<p>No blockers found from what you have entered.</p>') +
+      '<details><summary>Documents issuers often ask for</summary><ul><li>Business name, address and phone matching your registration</li><li>EIN letter or SSN, as applicable</li><li>Recent business bank statements</li><li>Proof of the revenue or income you will state</li></ul></details></div>';
     h += '<div class="panel"><h2>Application plan</h2><p class="sub">Ordered so rule-sensitive issuers go first. Apply to one card, wait for the decision, then continue. Dates are suggested earliest times, not issuer requirements.</p>';
     if (!plan.length) h += '<p>No card clears the rules for this goal right now. Review the cards on hold below, or change your goal.</p>';
     else {
       h += '<ol class="steps">' + plan.map(function (s, i) {
         var c = s.e.card, extra = (S.form.goal === 'financing' && c.intro) ? ' · 0% for ' + c.intro + ' months' : '';
-        return '<li><span class="when">' + (i === 0 ? 'Start ' : 'After ') + fmt(s.date.toISOString().slice(0, 10)) + '</span><div><b>' + esc(c.issuer + ' ' + c.name) + '</b><br><span class="pill ' + s.e.lik + '">' + esc(E.LABEL[s.e.lik]) + '</span>' + esc(extra) + ' <span class="src">· ' + esc(E.INQ_LABEL[c.inq] || E.INQ_LABEL.unknown) + '</span></div></li>';
+        return '<li><span class="when">' + (i === 0 ? 'Start ' : 'After ') + fmt(s.date.toISOString().slice(0, 10)) + '</span><div><b>' + esc(c.issuer + ' ' + c.name) + '</b><br><span class="pill ' + s.e.lik + '">' + esc(E.LABEL[s.e.lik]) + '</span>' + esc(extra) + ' <span class="src">· ' + esc(E.INQ_LABEL[c.inq] || E.INQ_LABEL.unknown) + '</span><div class="src">Issuer pre-approval check: <select data-pq="' + esc(c.id) + '" aria-label="Pre-approval result for ' + esc(c.name) + '">' + opts([['', 'Not checked'], ['approved', 'Shown pre-approved'], ['not_shown', 'Not shown / not pre-approved'], ['unavailable', 'No tool available']], S.pq[c.id] || '') + '</select></div></div></li>';
       }).join('') + '</ol><div class="row" style="margin-top:12px"><button class="btn" id="addPlan">Add this plan to my tracker</button></div>' +
         '<div class="callout"><b>Cut down on hard inquiries.</b> Before each step, look for a soft-pull pre-approval. Capital One offers one for business cards. Experian\'s "No Ding Decline" label, found in Experian\'s own card offers, limits the damage of a decline on certain personal cards; Experian does not say it covers business cards, so ask the issuer. ProStack is not affiliated with Experian. A pre-approval is not a guarantee, and applying still triggers a hard pull.</div><div class="callout">Check your actual credit report for new accounts and inquiries before each step. If a card is denied, stop and review the reason before applying elsewhere. Each denial costs a hard inquiry.</div>';
     }
@@ -183,7 +215,15 @@
       }).join('') + '</div>';
     });
     app.innerHTML = h;
-
+    Array.prototype.forEach.call(app.querySelectorAll('select[data-pq]'), function (sel) {
+      sel.addEventListener('change', function () {
+        if (!sel.value) return;
+        sb.from('prequal_results').insert({ user_id: S.user.id, card_id: sel.dataset.pq, result: sel.value }).then(function (r) {
+          if (r.error) fail(r.error); else flash('ok', 'Pre-approval result saved. Your plan has been updated.');
+          return loadAll();
+        }).then(function () { renderPlan(); });
+      });
+    });
 
     // report import (all in this browser; nothing is uploaded)
     (function () {
@@ -273,7 +313,7 @@
     var h = flashHtml() + '<div class="panel"><h2>Application tracker</h2><p class="sub">Record what actually happens at each issuer. Your own outcomes keep your plan honest. Only anonymized totals from groups of five or more are ever used to improve estimates.</p>';
     if (!S.apps.length) h += '<p>Nothing here yet. Build a plan and add it to your tracker.</p>';
     else {
-      h += '<div class="tablewrap"><table><thead><tr><th>Card</th><th>Status</th><th>Applied</th><th>Decided</th><th>Limit</th><th>Notes</th><th></th></tr></thead><tbody>';
+      h += '<div class="tablewrap"><table><thead><tr><th>Card</th><th>Status</th><th>Applied</th><th>Decided</th><th>Limit</th><th>Notes</th><th>Bureau pulled</th><th></th></tr></thead><tbody>';
       S.apps.forEach(function (a) {
         var c = cardById(a.card_id), id = esc(a.id), ends = a.intro_ends_on ? '<div class="src">0% ends ' + esc(fmt(a.intro_ends_on)) + '</div>' : '';
         h += '<tr data-id="' + id + '"><td><b>' + esc(cardName(a.card_id)) + '</b>' + (a.planned_on ? '<div class="src">Planned ' + esc(fmt(a.planned_on)) + '</div>' : '') + ends + '</td>' +
@@ -282,11 +322,17 @@
           '<td><input type="date" data-f="decided_on" value="' + esc(a.decided_on || '') + '" aria-label="Decided on"></td>' +
           '<td><input type="number" min="0" step="100" data-f="credit_limit" value="' + esc(a.credit_limit == null ? '' : a.credit_limit) + '" aria-label="Credit limit"' + (a.status === 'approved' ? '' : ' disabled') + '></td>' +
           '<td><input type="text" maxlength="200" data-f="denial_reason" placeholder="Denial reason / note" value="' + esc(a.denial_reason || '') + '" aria-label="Denial reason or note"></td>' +
+          '<td><select data-f="bureau_pulled" aria-label="Credit bureau pulled">' + opts([['', 'Unknown'], ['experian', 'Experian'], ['equifax', 'Equifax'], ['transunion', 'TransUnion']], a.bureau_pulled || '') + '</select></td>' +
           '<td class="row"><button class="btn" data-act="save">Save</button><button class="btn alt" data-act="del">Remove</button></td></tr>';
       });
       h += '</tbody></table></div>';
     }
     h += '</div>';
+    var pend = S.apps.filter(function (a) { return a.status === 'applied' && a.applied_on && (new Date() - new Date(a.applied_on + 'T00:00:00')) / 86400000 >= 7; });
+    if (pend.length) {
+      h += '<div class="panel"><h2>Waiting on a decision</h2><ul>' + pend.map(function (a) { return '<li><b>' + esc(cardName(a.card_id)) + '</b>, applied ' + esc(fmt(a.applied_on)) + '</li>'; }).join('') +
+        '</ul><p class="sub">Many issuers decide within about 7 to 10 business days, and some ask for documents first. Check your mail and email, including spam. Then use the status number on your application confirmation. You can say: "I applied on [date] and have not heard back. Can you tell me the status and whether you need anything from me?" Do not apply for another card while this one is open.</p></div>';
+    }
     var up = Advisor.upcoming(S.apps.filter(function (a) { return a.status === 'approved' && a.intro_ends_on; }).map(function (a) { return { card: cardName(a.card_id), ends: a.intro_ends_on }; }));
     if (up.length) {
       h += '<div class="panel"><h2>Upcoming 0% endings</h2><p class="sub">Dates are estimates from your approval date. Confirm on your statement.</p><ul>' +
@@ -314,7 +360,7 @@
         '<p class="src">You can call the issuer and ask for a second look. Results vary and approval is never guaranteed.</p><button class="btn alt" id="dl_use">Put reasons in my notes</button>';
       document.getElementById('dl_use').addEventListener('click', function () {
         var tr = app.querySelector('tr[data-id="' + document.getElementById('dl_app').value + '"]');
-        if (tr) { tr.querySelector('[data-f=denial_reason]').value = r.summary; out.insertAdjacentHTML('beforeend', '<p class="msg ok" role="status">Added to the notes. Press Save on that row to keep it.</p>'); }
+        if (tr) { S.reasonsFor = S.reasonsFor || {}; S.reasonsFor[tr.dataset.id] = r.reasons.map(function (x) { return x.key; }); tr.querySelector('[data-f=denial_reason]').value = r.summary; out.insertAdjacentHTML('beforeend', '<p class="msg ok" role="status">Added to the notes. Press Save on that row to keep it.</p>'); }
       });
     });
     var tbody = app.querySelector('tbody'); if (!tbody) return;
@@ -338,7 +384,7 @@
       var a = S.apps.filter(function (x) { return x.id === id; })[0], c = a && cardById(a.card_id), st = v('status');
       var limit = st === 'approved' && v('credit_limit') !== '' ? Math.max(0, +v('credit_limit')) : null;
       var decided = v('decided_on') || null;
-      var upd = { status: st, applied_on: v('applied_on') || null, decided_on: decided, credit_limit: limit, denial_reason: v('denial_reason') || null,
+      var upd = { status: st, applied_on: v('applied_on') || null, decided_on: decided, credit_limit: limit, denial_reason: v('denial_reason') || null, bureau_pulled: v('bureau_pulled') || null, adverse_reasons: (S.reasonsFor && S.reasonsFor[id]) || (a && a.adverse_reasons) || null,
         intro_ends_on: (st === 'approved' && decided && c && c.intro > 0) ? E.addMonths(new Date(decided + 'T00:00:00'), c.intro).toISOString().slice(0, 10) : null };
       sb.from('applications').update(upd).eq('id', id).then(function (r) {
         if (r.error) fail(r.error); else flash('ok', 'Saved.');
@@ -424,10 +470,12 @@
       sb.from('cards').select('*').order('issuer').order('name'),
       sb.from('issuer_rules').select('*').order('issuer').order('id'),
       S.isAdmin ? sb.rpc('staff_list') : none,
-      sb.from('catalog_proposals').select('*').eq('status', 'pending').order('created_at', { ascending: false }).limit(50)
+      sb.from('catalog_proposals').select('*').eq('status', 'pending').order('created_at', { ascending: false }).limit(50),
+      sb.rpc('rules_stale', { max_days: 60 }),
+      sb.from('rule_proposals').select('*').eq('status', 'pending').order('created_at', { ascending: false }).limit(50)
     ]).then(function (r) {
       for (var i = 0; i < r.length; i++) if (r[i].error) throw r[i].error;
-      var o = r[0].data || {}, out = r[1].data || [], cat = r[2].data || [], rules = r[3].data || [], team = r[4].data || [], props = r[5].data || [], st = o.by_status || {};
+      var o = r[0].data || {}, out = r[1].data || [], cat = r[2].data || [], rules = r[3].data || [], team = r[4].data || [], props = r[5].data || [], stale = r[6].data || [], rprops = r[7].data || [], st = o.by_status || {};
       function tile(label, val) { return '<div class="panel" style="margin:0"><div class="sub" style="margin:0">' + esc(label) + '</div><div style="font:600 28px var(--serif)">' + esc(val == null ? 0 : val) + '</div></div>'; }
       var decided = (st.approved || 0) + (st.denied || 0), rate = decided ? Math.round(100 * (st.approved || 0) / decided) + '%' : 'n/a';
       var h = fl + '<div class="panel"><h2>Staff dashboard</h2><p class="sub">Counts only. Individual client records are never shown here.</p>' +
@@ -449,6 +497,18 @@
           return '<tr data-id="' + esc(p.id) + '"><td><b>' + esc(cardName(p.card_id)) + '</b><div class="src">' + esc(p.model || '') + '</div></td><td>' + diff + '</td><td class="src">' + esc(p.evidence || '') + '</td><td>' + esc(fmt(p.created_at)) + '</td>' +
             '<td class="row"><button class="btn" data-act="approve">Approve</button><button class="btn alt" data-act="reject">Reject</button></td></tr>';
         }).join('') + '</tbody></table></div>';
+      // issuer rules: freshness + Hermes proposals
+      h += '</div><div class="panel"><h3>Issuer rules to re-verify (' + stale.length + ')</h3><p class="sub">Rules not verified in 60 days. Hermes can draft a proposal from the source page; you decide.</p>';
+      if (!stale.length) h += '<p>Every active rule was verified in the last 60 days.</p>';
+      else h += '<div class="tablewrap"><table><thead><tr><th>Issuer</th><th>Rule</th><th>Last verified</th></tr></thead><tbody>' + stale.map(function (x) { return '<tr><td>' + esc(x.issuer) + '</td><td>' + esc(x.rule_name) + '</td><td>' + esc(x.verified_on ? fmt(x.verified_on) : 'never') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+      h += '<h3>Proposed rule changes</h3>';
+      if (!rprops.length) h += '<p>No rule proposals waiting.</p>';
+      else h += '<div class="tablewrap"><table><thead><tr><th>Rule</th><th>Proposed change</th><th>Evidence</th><th></th></tr></thead><tbody id="rpBody">' + rprops.map(function (p) {
+        var cur = rules.filter(function (x) { return x.id === p.rule_id; })[0] || {};
+        return '<tr data-id="' + esc(p.id) + '"><td><b>' + esc(cur.issuer || '') + '</b> ' + esc(cur.rule_name || '') + '</td><td>' + Object.keys(p.changes || {}).map(function (k) { return '<div><b>' + esc(k) + '</b>: ' + esc(cur[k] == null ? 'none' : cur[k]) + ' \u2192 ' + esc(p.changes[k]) + '</div>'; }).join('') + '</td><td class="src">' + esc(p.evidence || '') + '</td>' +
+          '<td class="row"><button class="btn" data-act="approve">Approve</button><button class="btn alt" data-act="still_current">Still current</button><button class="btn alt" data-act="reject">Reject</button></td></tr>';
+      }).join('') + '</tbody></table></div>';
+      h += '<div class="row"><button class="btn alt" id="bmRefresh">Refresh bureau map from outcomes</button></div>';
       // catalog editor
       h += '</div><div class="panel"><h3>Card catalog</h3><p class="sub">Edit terms as issuers change them. Update the verified date whenever you confirm them. Inactive cards are hidden from clients. Cards are never deleted; mark them inactive.</p><div class="tablewrap"><table><thead><tr><th>Card</th><th>Fee</th><th>0% mo</th><th>APR text</th><th>Welcome offer</th><th>Conf.</th><th>Verified</th><th>Active</th><th></th></tr></thead><tbody id="catBody">' +
         cat.map(function (c) {
@@ -531,6 +591,21 @@
       if (res.error) fail(res.error); else if (res.data !== 'ok') flash('err', rpcMsg(res.data)); else flash('ok', okText);
       return loadAll().then(function () { renderStaff(); });
     }
+    var rp = document.getElementById('rpBody');
+    if (rp) rp.addEventListener('click', function (e) {
+      var act = e.target.dataset.act; if (['approve', 'reject', 'still_current'].indexOf(act) < 0) return;
+      sb.rpc('staff_review_rule_proposal', { p_id: +e.target.closest('tr').dataset.id, p_action: act }).then(function (res) {
+        if (res.error) fail(res.error); else if (res.data !== 'ok') flash('err', String(res.data)); else flash('ok', 'Done. The rule was updated and its version history kept.');
+        return loadAll().then(function () { renderStaff(); });
+      });
+    });
+    var bm = document.getElementById('bmRefresh');
+    if (bm) bm.addEventListener('click', function () {
+      sb.rpc('bureau_map_refresh').then(function (res) {
+        if (res.error) fail(res.error); else flash('ok', 'Bureau map refreshed for ' + res.data + ' issuer(s). Only issuers with 5+ outcomes are included.');
+        renderStaff();
+      });
+    });
     var pb = document.getElementById('propBody');
     if (pb) pb.addEventListener('click', function (e) {
       var act = e.target.dataset.act; if (act !== 'approve' && act !== 'reject') return;
@@ -617,7 +692,7 @@
   var booting = false;
   function onSession(session) {
     var user = session && session.user ? session.user : null;
-    if (!user) { S.user = null; S.form = null; S.imp = null; S.impMsg = ''; return render(); }
+    if (!user) { S.user = null; S.form = null; S.bv = null; S.imp = null; S.impMsg = ''; return render(); }
     if (S.user && S.user.id === user.id) return;
     S.user = user; booting = true;
     app.innerHTML = '<p>Loading…</p>';

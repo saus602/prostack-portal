@@ -25,3 +25,7 @@ Add `$env:DRY_RUN = "1"` to preview without filing anything. `MAX_CARDS` (defaul
 - Proposals can only touch fee, intro months, APR, rewards and welcome offer. Staff approve or reject each one.
 - Page text is sent only to Hermes on this computer. No cloud AI is called.
 - Local models can misread pages. Always read the evidence quote before approving.
+
+## Checking issuer rules (not just cards)
+
+`node rules-checker.mjs` works the same way as `checker.mjs`, but for issuer rules that have not been verified in 60 days. Hermes reads each rule's source page and either says it is still current or proposes new terms. Nothing changes until staff press Approve, Still current or Reject on the Staff tab. Same environment variables as above; `DRY_RUN=1` shows what it would file.
