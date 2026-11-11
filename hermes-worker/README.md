@@ -29,3 +29,7 @@ Add `$env:DRY_RUN = "1"` to preview without filing anything. `MAX_CARDS` (defaul
 ## Checking issuer rules (not just cards)
 
 `node rules-checker.mjs` works the same way as `checker.mjs`, but for issuer rules that have not been verified in 60 days. Hermes reads each rule's source page and either says it is still current or proposes new terms. Nothing changes until staff press Approve, Still current or Reject on the Staff tab. Same environment variables as above; `DRY_RUN=1` shows what it would file.
+
+## Training the approval model (later)
+
+Once 300+ outcomes exist per issuer, an admin exports them with `training_export()` and runs `python model/train.py outcomes.csv` locally. A model is saved only if it beats the plain approval rate on held-out outcomes and is not worse than the previous one. Until then the app keeps its rule-based labels.
