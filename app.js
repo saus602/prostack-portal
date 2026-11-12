@@ -57,7 +57,7 @@
     return {
       score: c.score_band || 720, new24: c.new_accounts_24m != null ? c.new_accounts_24m : 0,
       amexHeld: c.amex_credit_held || 0, amex90: c.amex_opened_90d || 0,
-      relBofa: !!c.rel_bofa, relUsb: !!c.rel_usb, goal: c.goal || 'financing',
+      relBofa: !!c.rel_bofa, relUsb: !!c.rel_usb, goal: c.goal || 'financing', target: c.target_credit == null ? '' : String(c.target_credit),
       biz: S.credit ? E.bizFromDate(p.business_started_on) : '6to24', plan: 3,
       business_name: p.business_name || '', full_name: p.full_name || ''
     };
@@ -179,6 +179,7 @@
       '<div class="field"><label for="f_biz">Business age</label><select id="f_biz">' + opts(BIZ, f.biz) + '</select></div>' +
       '<div class="field"><label for="f_goal">Main goal</label><select id="f_goal">' + opts(GOALS, f.goal) + '</select></div>' +
       '<div class="field"><label for="f_plan">Cards in your plan</label><select id="f_plan">' + opts([[2, '2'], [3, '3'], [4, '4'], [5, '5']], f.plan) + '</select></div>' +
+      '<div class="field"><label for="f_target">Total credit you are aiming for, in dollars (optional)</label><input id="f_target" type="number" min="0" max="10000000" step="1" inputmode="numeric" value="' + esc(f.target) + '"><div class="src">A tracking goal only. Issuers set every limit and may approve less, or decline.</div></div>' +
       '<div class="field"><label for="f_business_name">Business name (optional)</label><input id="f_business_name" type="text" maxlength="120" value="' + esc(f.business_name) + '"></div>' +
       '</div><div class="check"><input type="checkbox" id="f_relBofa"' + (f.relBofa ? ' checked' : '') + '><label for="f_relBofa" style="font-weight:400">I bank with Bank of America</label></div>' +
       '<div class="check"><input type="checkbox" id="f_relUsb"' + (f.relUsb ? ' checked' : '') + '><label for="f_relUsb" style="font-weight:400">I bank with U.S. Bank</label></div>' +
@@ -206,6 +207,13 @@
     }
     hp += '</details>';
     h = h0 + hp + h;
+    var cp = Advisor.creditProgress(S.apps, S.credit && S.credit.target_credit);
+    if (cp) {
+      h += '<div class="panel"><h2>Your credit target</h2><p class="sub">Approved limits you have entered in the tracker, against the total you are aiming for. Issuers decide every limit, so this is a way to track progress, not a forecast.</p>' +
+        '<div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + cp.pct + '" aria-label="Approved credit toward target"><span style="width:' + cp.pct + '%"></span></div>' +
+        '<p><b>$' + cp.got.toLocaleString('en-US') + '</b> approved of <b>$' + cp.target.toLocaleString('en-US') + '</b> (' + cp.pct + '%)' + (cp.met ? ' · target reached' : ' · $' + cp.left.toLocaleString('en-US') + ' to go') + '</p>' +
+        '<p class="src">' + cp.approved + ' approved · ' + cp.applied + ' waiting on a decision · ' + cp.planned + ' planned. Nothing about pending or planned cards is counted until it is approved.</p></div>';
+    }
     var rd = E.readiness(p, { hasDocs: S.bv && S.bv.has_revenue_docs, pending: S.apps.filter(function (a) { return a.status === 'applied'; }).length,
       recentDenial: S.apps.some(function (a) { return a.status === 'denied' && a.decided_on && (new Date() - new Date(a.decided_on + 'T00:00:00')) / 86400000 < 30; }) });
     h += '<div class="panel"><h2>Readiness: ' + rd.score + ' / 100</h2><p class="sub">A simple checklist score, not a prediction of approval.</p>' + (rd.blocker ? '<p><b>Biggest blocker:</b> ' + esc(rd.blocker) + '</p>' : '<p>No blockers found from what you have entered.</p>') +
@@ -295,15 +303,20 @@
     })();
     var form = document.getElementById('pf');
     function readForm() {
-      ['score', 'new24', 'amexHeld', 'amex90', 'biz', 'goal', 'plan', 'business_name'].forEach(function (k) { S.form[k] = document.getElementById('f_' + k).value; });
+      ['score', 'new24', 'amexHeld', 'amex90', 'biz', 'goal', 'plan', 'business_name', 'target'].forEach(function (k) { S.form[k] = document.getElementById('f_' + k).value; });
       S.form.relBofa = document.getElementById('f_relBofa').checked; S.form.relUsb = document.getElementById('f_relUsb').checked;
     }
-    form.addEventListener('change', function () { readForm(); renderPlan(); });
+    form.addEventListener('change', function (ev) {
+      readForm();
+      // The target and business name do not affect the plan; redrawing on blur would swallow the click on Save.
+      if (ev.target && (ev.target.id === 'f_target' || ev.target.id === 'f_business_name')) return;
+      renderPlan();
+    });
     form.onsubmit = function (e) {
       e.preventDefault(); readForm();
       var f = S.form, uid = S.user.id;
       Promise.all([
-        sb.from('credit_profiles').upsert({ user_id: uid, score_band: +f.score, new_accounts_24m: Math.max(0, Math.min(50, +f.new24 || 0)), amex_credit_held: Math.max(0, Math.min(20, +f.amexHeld || 0)), amex_opened_90d: Math.max(0, Math.min(20, +f.amex90 || 0)), rel_bofa: !!f.relBofa, rel_usb: !!f.relUsb, goal: f.goal }, { onConflict: 'user_id' }),
+        sb.from('credit_profiles').upsert({ user_id: uid, score_band: +f.score, new_accounts_24m: Math.max(0, Math.min(50, +f.new24 || 0)), amex_credit_held: Math.max(0, Math.min(20, +f.amexHeld || 0)), amex_opened_90d: Math.max(0, Math.min(20, +f.amex90 || 0)), rel_bofa: !!f.relBofa, rel_usb: !!f.relUsb, goal: f.goal, target_credit: (f.target === '' || f.target == null) ? null : Math.max(0, Math.min(10000000, Math.round(+f.target) || 0)) }, { onConflict: 'user_id' }),
         sb.from('profiles').update({ business_name: f.business_name || null, business_started_on: E.dateFromBiz(f.biz) }).eq('id', uid)
       ]).then(function (r) {
         var err = r[0].error || r[1].error;

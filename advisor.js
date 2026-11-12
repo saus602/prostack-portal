@@ -86,6 +86,19 @@
     lines.push('END:VCALENDAR');
     return lines.join('\r\n') + '\r\n';
   }
-  var api = { spendProgress: spendProgress, buildStatementIcs: buildStatementIcs, readDenial: readDenial, NO_MATCH: NO_MATCH, upcoming: upcoming, buildIcs: buildIcs };
+  /* Tracking goal for total approved credit. Counts approved limits the client entered; never a forecast. */
+  function creditProgress(apps, target) {
+    var t = Number(target);
+    if (!isFinite(t) || t <= 0) return null;
+    var got = 0, approved = 0, pending = 0, pendingCards = 0;
+    (apps || []).forEach(function (a) {
+      if (a.status === 'approved') { approved++; got += Math.max(0, Number(a.credit_limit) || 0); }
+      else if (a.status === 'applied') pendingCards++;
+      else if (a.status === 'planned') pending++;
+    });
+    var left = Math.max(0, t - got);
+    return { target: t, got: got, left: left, pct: Math.min(100, Math.round(got / t * 100)), approved: approved, applied: pendingCards, planned: pending, met: got >= t };
+  }
+  var api = { creditProgress: creditProgress, spendProgress: spendProgress, buildStatementIcs: buildStatementIcs, readDenial: readDenial, NO_MATCH: NO_MATCH, upcoming: upcoming, buildIcs: buildIcs };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Advisor = api;
 })(typeof window !== 'undefined' ? window : this);
