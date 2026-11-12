@@ -334,6 +334,22 @@
       h += '<div class="panel"><h2>Waiting on a decision</h2><ul>' + pend.map(function (a) { return '<li><b>' + esc(cardName(a.card_id)) + '</b>, applied ' + esc(fmt(a.applied_on)) + '</li>'; }).join('') +
         '</ul><p class="sub">Many issuers decide within about 7 to 10 business days, and some ask for documents first. Check your mail and email, including spam. Then use the status number on your application confirmation. You can say: "I applied on [date] and have not heard back. Can you tell me the status and whether you need anything from me?" Do not apply for another card while this one is open.</p></div>';
     }
+    var appr = S.apps.filter(function (a) { return a.status === 'approved'; });
+    if (appr.length) {
+      h += '<div class="panel"><h2>Welcome bonus spending</h2><p class="sub">Spend only on real business expenses. Do not buy gift cards, pay yourself, or move money around to reach a minimum; issuers watch for that and may close the account. Dates count from your approval date and are estimates. Check your offer terms.</p><div class="tablewrap"><table id="spendTbl"><thead><tr><th>Card</th><th>Bonus goal</th><th>Spent so far ($)</th><th>Statement closes (day of month)</th><th></th></tr></thead><tbody>' +
+        appr.map(function (a) {
+          var c = cardById(a.card_id), sp = Advisor.spendProgress(a, c), goal = sp ? ('Spend ' + money(sp.target) + ' by ' + fmt(sp.ends) + (sp.state === 'met' ? ' (met)' : sp.state === 'missed' ? ' (window passed)' : ' (' + sp.daysLeft + ' days left' + (sp.perWeek ? ', about ' + money(sp.perWeek) + ' a week' : '') + ')')) : 'No spend minimum on file';
+          return '<tr data-id="' + esc(a.id) + '"><td><b>' + esc(cardName(a.card_id)) + '</b></td><td>' + esc(goal) + (sp && sp.state === 'behind' ? '<div class="src">You may be behind. Only count real business spending.</div>' : '') + '</td>' +
+            '<td><input type="number" min="0" step="50" data-f="spend_so_far" value="' + esc(a.spend_so_far == null ? '' : a.spend_so_far) + '" aria-label="Spent so far"></td>' +
+            '<td><input type="number" min="1" max="31" data-f="statement_day" value="' + esc(a.statement_day == null ? '' : a.statement_day) + '" aria-label="Statement closing day"></td>' +
+            '<td class="row"><button class="btn" data-act="spendsave">Save</button></td></tr>';
+        }).join('') + '</tbody></table></div><button class="btn alt" id="stmtBtn">Download statement reminders (.ics)</button><p class="src">Monthly reminder 3 days before each statement closes. Paying down before then lowers the balance reported to the bureaus.</p></div>';
+    }
+    var aged = appr.filter(function (a) { return a.decided_on && (new Date() - new Date(a.decided_on + 'T00:00:00')) / 86400000 >= 180; });
+    if (aged.length) {
+      h += '<div class="panel"><h2>Ask about a higher credit limit</h2><p class="sub">These cards are at least 6 months old. Before you ask, call the issuer and ask whether a limit request uses a soft or a hard credit check. Requests can be declined, and a decline is not a sign of a problem with the account.</p><ul>' +
+        aged.map(function (a) { return '<li><b>' + esc(cardName(a.card_id)) + '</b>, opened ' + esc(fmt(a.decided_on)) + '</li>'; }).join('') + '</ul></div>';
+    }
     var up = Advisor.upcoming(S.apps.filter(function (a) { return a.status === 'approved' && a.intro_ends_on; }).map(function (a) { return { card: cardName(a.card_id), ends: a.intro_ends_on }; }));
     if (up.length) {
       h += '<div class="panel"><h2>Upcoming 0% endings</h2><p class="sub">Dates are estimates from your approval date. Confirm on your statement.</p><ul>' +
@@ -348,6 +364,24 @@
         '<div class="row"><button class="btn" id="dl_go">Read it</button></div><div id="dl_out"></div></div>';
     }
     app.innerHTML = h;
+    var sb2 = document.getElementById('stmtBtn');
+    if (sb2) sb2.addEventListener('click', function () {
+      var list = S.apps.filter(function (a) { return a.status === 'approved' && a.statement_day; }).map(function (a) { return { card: cardName(a.card_id), day: a.statement_day }; });
+      if (!list.length) { flash('err', 'Enter a statement closing day on at least one card first.'); return renderTracker(); }
+      var blob = new Blob([Advisor.buildStatementIcs(list)], { type: 'text/calendar' }), u = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = u; a.download = 'prostack-statement-reminders.ics'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(u); }, 1000);
+    });
+    var st = document.getElementById('spendTbl');
+    if (st) st.addEventListener('click', function (e) {
+      if (e.target.dataset.act !== 'spendsave') return;
+      var tr = e.target.closest('tr'), id = tr.dataset.id;
+      function val(f) { return tr.querySelector('[data-f=' + f + ']').value; }
+      var upd = { spend_so_far: val('spend_so_far') === '' ? null : Math.max(0, +val('spend_so_far')), statement_day: val('statement_day') === '' ? null : Math.min(31, Math.max(1, Math.round(+val('statement_day')))) };
+      sb.from('applications').update(upd).eq('id', id).then(function (r) {
+        if (r.error) fail(r.error); else flash('ok', 'Saved.');
+        return loadAll();
+      }).then(function () { renderTracker(); });
+    });
     var ib = document.getElementById('icsBtn');
     if (ib) ib.addEventListener('click', function () {
       var blob = new Blob([Advisor.buildIcs(up)], { type: 'text/calendar' }), u = URL.createObjectURL(blob), a = document.createElement('a');

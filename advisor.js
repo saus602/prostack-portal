@@ -57,6 +57,35 @@
     lines.push('END:VCALENDAR');
     return lines.join('\r\n') + '\r\n';
   }
-  var api = { readDenial: readDenial, NO_MATCH: NO_MATCH, upcoming: upcoming, buildIcs: buildIcs };
+
+  // Welcome-bonus spend progress. app: {decided_on, spend_so_far}; card: {minSpend, spendDays}
+  function spendProgress(app, card, now) {
+    if (!card || !card.minSpend || !card.spendDays || !app.decided_on) return null;
+    now = now || new Date();
+    var t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    var end = addDays(app.decided_on, card.spendDays);
+    var left = Math.round((end - t0) / 86400000);
+    var spent = Number(app.spend_so_far || 0), need = Math.max(0, card.minSpend - spent);
+    var state = need === 0 ? 'met' : left < 0 ? 'missed' : (left > 0 && need / left * 30 > card.minSpend * 0.45 && left < card.spendDays * 0.5) ? 'behind' : 'ontrack';
+    return { target: card.minSpend, spent: spent, need: need, daysLeft: left, ends: ymdDash(end), state: state, perWeek: left > 0 && need > 0 ? Math.ceil(need / (left / 7)) : 0 };
+  }
+  function ymdDash(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+  // Monthly "pay before the statement closes" reminders, 3 days before each statement day.
+  function buildStatementIcs(list, now) {
+    now = now || new Date();
+    var stamp = now.toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+    var lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//ProStack//Statements//EN', 'CALSCALE:GREGORIAN'];
+    list.forEach(function (x, i) {
+      var day = Math.min(28, Math.max(1, Number(x.day))), rem = Math.max(1, day - 3);
+      var start = new Date(now.getFullYear(), now.getMonth(), rem); if (start < new Date(now.getFullYear(), now.getMonth(), now.getDate())) start = new Date(now.getFullYear(), now.getMonth() + 1, rem);
+      var end = new Date(start.getTime()); end.setDate(end.getDate() + 1);
+      lines.push('BEGIN:VEVENT', 'UID:prostack-stmt-' + i + '-' + day + '@prostack', 'DTSTAMP:' + stamp, 'DTSTART;VALUE=DATE:' + ymd(start), 'DTEND;VALUE=DATE:' + ymd(end),
+        'RRULE:FREQ=MONTHLY', 'SUMMARY:' + esc('Statement for ' + x.card + ' closes around the ' + day + 'th'),
+        'DESCRIPTION:' + esc('Paying down the balance before the statement closes lowers the balance that gets reported. Check your own statement for the exact closing date.'), 'END:VEVENT');
+    });
+    lines.push('END:VCALENDAR');
+    return lines.join('\r\n') + '\r\n';
+  }
+  var api = { spendProgress: spendProgress, buildStatementIcs: buildStatementIcs, readDenial: readDenial, NO_MATCH: NO_MATCH, upcoming: upcoming, buildIcs: buildIcs };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Advisor = api;
 })(typeof window !== 'undefined' ? window : this);

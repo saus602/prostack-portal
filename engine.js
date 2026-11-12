@@ -17,6 +17,7 @@
       fit: r.goal_fit || {}, reportsPersonal: !!r.reports_personal,
       bofa: r.issuer === 'Bank of America', usb: r.issuer === 'U.S. Bank',
       inq: r.inquiry_path || 'unknown', inqNote: r.inquiry_note || '',
+      minSpend: r.bonus_min_spend == null ? null : Number(r.bonus_min_spend), spendDays: r.bonus_window_days || null,
       note: r.note || '', src: r.source_url || '', date: r.source_date || ''
     };
   }
