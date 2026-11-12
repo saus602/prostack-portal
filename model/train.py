@@ -5,6 +5,7 @@ exported by an ADMIN through the training_export() function (it returns nothing 
 
     python train.py outcomes.csv            # train, calibrate, and gate
     python train.py --selftest              # check the pipeline on synthetic data
+    python simulate_test.py             # simulation tests of the gate (planted signal, noise, edge cases)
 
 The model is only saved (model.json) if it beats the baseline (the plain approval rate) on held-out
 outcomes AND is not worse than the previous model's calibration. Otherwise nothing changes and the
@@ -19,6 +20,7 @@ from sklearn.model_selection import train_test_split
 
 MIN_PER_ISSUER = 300   # per the build plan: a few hundred outcomes per issuer before a model goes live
 MIN_TOTAL = 300
+MIN_GAIN = 0.02        # model must beat the plain approval rate by at least 2% (relative Brier) so chance wins on noise are rejected
 
 def load(path):
     rows = list(csv.DictReader(open(path)))
@@ -35,6 +37,8 @@ def run(X, y, iss, prev_brier=None, out='model.json'):
     vocab = sorted(i for i, n in counts.items() if n >= MIN_PER_ISSUER)
     if len(y) < MIN_TOTAL or not vocab:
         return 'not enough outcomes yet (need %d per issuer; have %s)' % (MIN_PER_ISSUER, counts)
+    if len(set(y.tolist())) < 2:
+        return 'gate: all outcomes are the same (all approved or all denied); nothing to learn yet'
     keep = np.isin(iss, vocab)
     X, y, iss = X[keep], y[keep], iss[keep]
     F = np.hstack([X, issuer_features(iss, vocab)])
@@ -44,8 +48,8 @@ def run(X, y, iss, prev_brier=None, out='model.json'):
     iso = IsotonicRegression(out_of_bounds='clip').fit(m.predict_proba(Fcal)[:, 1], ycal)
     p = iso.predict(m.predict_proba(Fte)[:, 1])
     brier = brier_score_loss(yte, p); base = brier_score_loss(yte, np.full_like(p, ytr.mean()))
-    if brier >= base:
-        return 'gate: model (%.4f) does not beat the plain approval rate (%.4f); keeping rule-based labels' % (brier, base)
+    if brier > base * (1 - MIN_GAIN):
+        return 'gate: model (%.4f) does not beat the plain approval rate (%.4f) by %d%%; keeping rule-based labels' % (brier, base, MIN_GAIN * 100)
     if prev_brier is not None and brier > prev_brier:
         return 'gate: model (%.4f) calibrates worse than the previous one (%.4f); keeping the previous one' % (brier, prev_brier)
     # Save a small, portable summary: calibrated approval rate by issuer and score band (what the app can display)
