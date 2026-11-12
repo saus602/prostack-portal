@@ -100,6 +100,23 @@
     };
   }
 
+  function renderNewPassword() {
+    nav.hidden = true;
+    app.innerHTML = '<div class="panel auth"><h2>Set a new password</h2><p class="sub">Choose a password with at least 10 characters.</p>' + flashHtml() +
+      '<form id="npForm"><div class="field"><label for="np1">New password</label><input id="np1" type="password" autocomplete="new-password" minlength="10" required></div>' +
+      '<div class="field"><label for="np2">Repeat it</label><input id="np2" type="password" autocomplete="new-password" minlength="10" required></div>' +
+      '<div class="row"><button class="btn" type="submit">Save password</button></div></form></div>';
+    document.getElementById('npForm').onsubmit = function (e) {
+      e.preventDefault();
+      var a = document.getElementById('np1').value, b = document.getElementById('np2').value;
+      if (a !== b) { flash('err', 'The two passwords do not match.'); return renderNewPassword(); }
+      sb.auth.updateUser({ password: a }).then(function (r) {
+        if (r.error) { flash('err', r.error.message); return renderNewPassword(); }
+        S.recovery = false; flash('ok', 'Password updated.'); render();
+      });
+    };
+  }
+
   function renderConsent() {
     nav.hidden = true;
     var have = {}; S.consents.forEach(function (c) { if (c.version === CFG.consentVersion) have[c.consent_type] = 1; });
@@ -467,9 +484,11 @@
   function renderAccount() {
     app.innerHTML = flashHtml() + '<div class="panel"><h2>Account</h2><p class="sub">Signed in as ' + esc(S.user.email) + '</p>' +
       '<div class="row"><button class="btn" id="exp">Download my data (JSON)</button><button class="btn alt" id="so">Sign out</button></div></div>' +
+      '<div class="panel"><h3>Change password</h3><div class="row"><button class="btn alt" id="chpw">Change my password</button></div></div>' +
       '<div class="panel"><h3>Delete my data</h3><p class="sub">Removes your credit profile, tracker entries, existing-card records and repayment plans. Your consent record and login stay so we can show what you agreed to; contact support to close the login itself.</p>' +
       '<button class="btn danger" id="del">Delete my data</button></div>';
     document.getElementById('so').onclick = function () { sb.auth.signOut(); };
+    document.getElementById('chpw').onclick = function () { S.recovery = true; render(); };
     document.getElementById('exp').onclick = function () {
       var blob = new Blob([JSON.stringify({ exported_at: new Date().toISOString(), email: S.user.email, profile: S.profile, credit_profile: S.credit, applications: S.apps, repayment_plan: S.repay, consents: S.consents }, null, 2)], { type: 'application/json' });
       var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'prostack-my-data.json'; a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
@@ -716,6 +735,7 @@
   /* ---------- shell ---------- */
   function render() {
     if (!S.user) return renderAuth('signin');
+    if (S.recovery) return renderNewPassword();
     if (!hasAllConsents()) return renderConsent();
     nav.hidden = false;
     nav.querySelector('[data-tab=staff]').hidden = !S.isStaff;
@@ -733,6 +753,9 @@
     app.innerHTML = '<p>Loading…</p>';
     loadAll().then(function () { S.form = formFromState(); booting = false; render(); }, function (e) { booting = false; fail(e); render(); });
   }
-  sb.auth.onAuthStateChange(function (ev, session) { setTimeout(function () { onSession(session); }, 0); });
+  sb.auth.onAuthStateChange(function (ev, session) {
+    if (ev === 'PASSWORD_RECOVERY') S.recovery = true;
+    setTimeout(function () { onSession(session); if (S.recovery && S.user) render(); }, 0);
+  });
   sb.auth.getSession().then(function (r) { onSession(r.data.session); });
 })();
