@@ -50,3 +50,14 @@ node checker.mjs
 ```
 
 The gateway caps replies at 128 tokens and uses a small context window, so in this mode the checkers send only the sentences from each page that mention fees, rates, bonuses or rule terms. Keep MAX_CARDS small; it runs on the CPU.
+
+## Using a local server on the Alienware (Qwen3 or similar)
+
+If the model server on the Alienware speaks the OpenAI-style API (most do: llama.cpp server, LM Studio, vLLM, and Ollama's /v1), run the checkers on the Alienware itself and leave HERMES_GATEWAY_TOKEN unset:
+
+```powershell
+$env:HERMES_URL = "http://localhost:PORT/v1"     # or http://192.168.1.2:PORT/v1 from another PC
+$env:HERMES_MODEL = "the-exact-model-name"       # whatever the server lists, for example a qwen3 name
+```
+
+The checkers strip any `<think>...</think>` reasoning before reading the answer. With a 64K context window the full page text is sent, not the short excerpts used for the gateway.

@@ -84,6 +84,7 @@ async function askHermes(rule, text) {
     if (!r.ok) throw new Error('Hermes error ' + r.status + ': ' + JSON.stringify(d).slice(0, 200));
     out = d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content || '';
   }
+  out = String(out).replace(/<think>[\s\S]*?<\/think>/gi, '');  // Qwen3 and similar models may print their reasoning first
   const m = out.match(/\{[\s\S]*\}/); if (!m) return null;
   try { return JSON.parse(m[0]); } catch { return null; }
 }
