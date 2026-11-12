@@ -6,9 +6,10 @@
 
   function parseDate(s) {
     if (!s) return null; s = String(s).trim(); var m, y, mo, d;
-    if ((m = s.match(/^(\d{4})-(\d{2})(?:-(\d{2}))?$/))) return new Date(+m[1], +m[2] - 1, +(m[3] || 1));
-    if ((m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/))) { y = +m[3]; if (y < 100) y += 2000; return new Date(y, +m[1] - 1, +m[2]); }
-    if ((m = s.match(/^(\d{1,2})\/(\d{4})$/))) return new Date(+m[2], +m[1] - 1, 1);
+    function real(yy, mm, dd) { var t = new Date(yy, mm - 1, dd); return t.getFullYear() === yy && t.getMonth() === mm - 1 && t.getDate() === dd ? t : null; }
+    if ((m = s.match(/^(\d{4})-(\d{2})(?:-(\d{2}))?$/))) return real(+m[1], +m[2], +(m[3] || 1));
+    if ((m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/))) { y = +m[3]; if (y < 100) y += 2000; return real(y, +m[1], +m[2]); }
+    if ((m = s.match(/^(\d{1,2})\/(\d{4})$/))) return real(+m[2], +m[1], 1);
     if ((m = s.match(/^([A-Za-z]{3})[A-Za-z]*\.?\s+(?:(\d{1,2}),?\s+)?(\d{4})$/))) { mo = MONTHS[m[1].toLowerCase()]; if (mo == null) return null; return new Date(+m[3], mo, +(m[2] || 1)); }
     return null;
   }
@@ -51,7 +52,7 @@
         build(blk, (blk.slice(0, idx - start).trim().match(/([A-Z][A-Z0-9&.' \-]{3,38})\s*$/) || [])[1] || '');
       });
     }
-    var sc = text.match(/(?:FICO|Vantage\s*Score)[\s\S]{0,40}?\b([3-8]\d{2})\b/i);
+    var sc = text.match(/(?:FICO|Vantage\s*Score|credit\s+score)[\s\S]{0,40}?\b([3-8]\d{2})\b/i);
     var score = sc ? +sc[1] : null;
     var inq = 0, hi = text.search(/hard\s+inquiries/i);
     if (hi >= 0) {
