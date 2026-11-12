@@ -3,7 +3,9 @@
 // for staff to approve in the portal. It never changes the live catalog itself.
 // No dependencies. Needs Node 18+.
 
+import { gatewayChat, focus } from './gateway.mjs';
 const env = process.env;
+const GATEWAY_TOKEN = env.HERMES_GATEWAY_TOKEN || '';  // set this to use the HTTPS gateway (see README)
 const SUPABASE_URL = env.PROSTACK_SUPABASE_URL || 'https://valsmxbitcghxfoxuedd.supabase.co';
 const SUPABASE_KEY = env.PROSTACK_SUPABASE_KEY || 'sb_publishable_cfOSF0jfx8isyLq9ftTN9A_q9qLWsb2';
 const STAFF_EMAIL = env.PROSTACK_STAFF_EMAIL;
@@ -69,17 +71,21 @@ async function askHermes(card, text) {
   const current = Object.fromEntries(FIELDS.map(f => [f, card[f]]));
   const prompt = 'You check credit card terms against a web page. Card: ' + card.issuer + ' ' + card.name + '.\n' +
     'Current record: ' + JSON.stringify(current) + '\n' +
-    'Page text (may be partial):\n' + text.slice(0, 12000) + '\n\n' +
+    'Page text (may be partial):\n' + (GATEWAY_TOKEN ? focus(text, /annual fee|intro|apr|0%|bonus|earn|\$\d|\d%/i, 2000) : text.slice(0, 12000)) + '\n\n' +
     'Reply with ONLY a JSON object: {"changes": {...}, "evidence": "..."}. In "changes" include a field ONLY if the page clearly states a DIFFERENT value for it. ' +
     'Allowed fields: annual_fee (number, dollars), intro_months (integer), apr_low, apr_high (numbers), apr_text, rewards, welcome_bonus (short text). ' +
     '"evidence" is one short quote from the page that supports the change. If nothing differs or the page does not clearly say, reply {"changes": {}, "evidence": ""}. Never guess.';
-  const r = await fetch(HERMES_URL + '/chat/completions', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: HERMES_MODEL, temperature: 0, messages: [{ role: 'user', content: prompt }] })
-  });
-  const d = await j(r);
-  if (!r.ok) throw new Error('Hermes error ' + r.status + ': ' + JSON.stringify(d).slice(0, 200));
-  const out = d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content || '';
+  let out = '';
+  if (GATEWAY_TOKEN) out = await gatewayChat({ url: HERMES_URL, token: GATEWAY_TOKEN, prompt });
+  else {
+    const r = await fetch(HERMES_URL + '/chat/completions', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: HERMES_MODEL, temperature: 0, messages: [{ role: 'user', content: prompt }] })
+    });
+    const d = await j(r);
+    if (!r.ok) throw new Error('Hermes error ' + r.status + ': ' + JSON.stringify(d).slice(0, 200));
+    out = d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content || '';
+  }
   const m = out.match(/\{[\s\S]*\}/);
   if (!m) return null;
   try { return JSON.parse(m[0]); } catch { return null; }

@@ -33,3 +33,20 @@ Add `$env:DRY_RUN = "1"` to preview without filing anything. `MAX_CARDS` (defaul
 ## Training the approval model (later)
 
 Once 300+ outcomes exist per issuer, an admin exports them with `training_export()` and runs `python model/train.py outcomes.csv` locally. A model is saved only if it beats the plain approval rate on held-out outcomes and is not worse than the previous one. Until then the app keeps its rule-based labels.
+
+## Using the Hermes worker gateway (model on a different PC)
+
+If your model PC runs the locked "Hermes worker" gateway (HTTPS, one allowed computer, bearer token), run the checkers on the ALLOWED computer with:
+
+```powershell
+cd $HOME\ProStackChecker
+# download checker.mjs, rules-checker.mjs and gateway.mjs from this folder first
+$env:NODE_EXTRA_CA_CERTS = "C:\path\to\cert.pem"      # copy cert.pem (the public certificate) from the model PC
+$env:HERMES_URL = "https://192.168.1.3:18458"         # the model PC's address and port, as in its config.json
+$env:HERMES_GATEWAY_TOKEN = "<token from config.json>" # type it yourself; never paste it in chat
+$env:PROSTACK_STAFF_EMAIL = "..."; $env:PROSTACK_STAFF_PASSWORD = "..."
+$env:DRY_RUN = "1"; $env:MAX_CARDS = "3"
+node checker.mjs
+```
+
+The gateway caps replies at 128 tokens and uses a small context window, so in this mode the checkers send only the sentences from each page that mention fees, rates, bonuses or rule terms. Keep MAX_CARDS small; it runs on the CPU.
