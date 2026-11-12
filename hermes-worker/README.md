@@ -61,3 +61,5 @@ $env:HERMES_MODEL = "the-exact-model-name"       # whatever the server lists, fo
 ```
 
 The checkers strip any `<think>...</think>` reasoning before reading the answer. With a 64K context window the full page text is sent, not the short excerpts used for the gateway.
+
+If the server needs an API key (llama.cpp `--api-key`), point the checkers at the key file so the key never appears on screen: `$env:HERMES_API_KEY_FILE = "D:\HermesRuntime\Keys\inference.key"`. (`HERMES_API_KEY` also works.)

@@ -5,6 +5,9 @@
 
 import { gatewayChat, focus } from './gateway.mjs';
 const env = process.env;
+import { readFileSync } from 'node:fs';
+let API_KEY = env.HERMES_API_KEY || '';
+if (!API_KEY && env.HERMES_API_KEY_FILE) { try { API_KEY = readFileSync(env.HERMES_API_KEY_FILE, 'utf8').trim(); } catch (e) { console.error('Cannot read HERMES_API_KEY_FILE: ' + e.message); process.exit(1); } }
 const GATEWAY_TOKEN = env.HERMES_GATEWAY_TOKEN || '';  // set this to use the HTTPS gateway (see README)
 const SUPABASE_URL = env.PROSTACK_SUPABASE_URL || 'https://valsmxbitcghxfoxuedd.supabase.co';
 const SUPABASE_KEY = env.PROSTACK_SUPABASE_KEY || 'sb_publishable_cfOSF0jfx8isyLq9ftTN9A_q9qLWsb2';
@@ -77,7 +80,7 @@ async function askHermes(rule, text) {
   if (GATEWAY_TOKEN) out = await gatewayChat({ url: HERMES_URL, token: GATEWAY_TOKEN, prompt });
   else {
     const r = await fetch(HERMES_URL + '/chat/completions', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...(API_KEY ? { Authorization: 'Bearer ' + API_KEY } : {}) },
       body: JSON.stringify({ model: HERMES_MODEL, temperature: 0, messages: [{ role: 'user', content: prompt }] })
     });
     const d = await j(r);
