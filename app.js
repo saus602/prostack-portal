@@ -328,7 +328,7 @@
     if (add) add.onclick = function () {
       var existing = {}; S.apps.forEach(function (a) { if (a.status !== 'withdrawn' && a.status !== 'denied') existing[a.card_id] = 1; });
       var rows = plan.filter(function (s) { return !existing[s.e.card.id]; }).map(function (s) {
-        return { user_id: S.user.id, card_id: s.e.card.id, status: 'planned', planned_on: s.date.toISOString().slice(0, 10), score_band: +S.form.score, new_accounts_24m: +S.form.new24 || 0 };
+        return { user_id: S.user.id, card_id: s.e.card.id, status: 'planned', planned_on: s.date.toISOString().slice(0, 10), score_band: +S.form.score, new_accounts_24m: +S.form.new24 || 0, predicted_likelihood: s.e.lik };
       });
       if (!rows.length) { flash('info', 'Those cards are already in your tracker.'); return renderPlan(); }
       sb.from('applications').insert(rows).then(function (r) {
@@ -509,7 +509,8 @@
     document.getElementById('del').onclick = function () {
       if (!window.confirm('Delete your credit profile, tracker and repayment plans? This cannot be undone.')) return;
       var uid = S.user.id;
-      Promise.all(['applications', 'user_cards', 'repayment_plans', 'credit_profiles'].map(function (t) { return sb.from(t).delete().eq('user_id', uid); })
+      sb.storage.from('client-docs').list(uid).then(function (l) { var paths = (l.data || []).map(function (f) { return uid + '/' + f.name; }); return paths.length ? sb.storage.from('client-docs').remove(paths) : null; }).catch(function () {});
+      Promise.all(['applications', 'user_cards', 'repayment_plans', 'credit_profiles', 'client_checklist', 'credit_scores_log', 'disputes', 'client_documents'].map(function (t) { return sb.from(t).delete().eq('user_id', uid); })
         .concat([sb.from('profiles').update({ business_name: null, business_started_on: null, full_name: null, state: null, business_type: null }).eq('id', uid)]))
         .then(function (r) {
           var err = r.map(function (x) { return x.error; }).filter(Boolean)[0];
@@ -753,8 +754,15 @@
     nav.hidden = false;
     nav.querySelector('[data-tab=staff]').hidden = !S.isStaff;
     Array.prototype.forEach.call(nav.querySelectorAll('button'), function (b) { b.setAttribute('aria-current', b.dataset.tab === S.tab ? 'page' : 'false'); });
-    ({ plan: renderPlan, tracker: renderTracker, repay: renderRepay, account: renderAccount, staff: renderStaff }[S.tab] || renderPlan)();
+    var X = window.ProExtra || {};
+    ['clients', 'cases'].forEach(function (t) { var b = nav.querySelector('[data-tab=' + t + ']'); if (b) b.hidden = !S.isStaff; });
+    var fn = { plan: renderPlan, tracker: renderTracker, repay: renderRepay, account: renderAccount, staff: renderStaff }[S.tab] || X[S.tab] || renderPlan;
+    fn();
+    if (S.tab === 'account' && X.afterAccount) X.afterAccount();
+    if (['staff', 'clients', 'cases'].indexOf(S.tab) < 0 && X.banner) X.banner();
   }
+  window.ProApp = { S: S, sb: sb, app: app, esc: esc, fmt: fmt, money: money, opts: opts, flash: flash, flashHtml: flashHtml, fail: fail, loadAll: loadAll, cardById: cardById, cardName: cardName,
+    profileForEngine: profileForEngine, GOALS: GOALS, rerender: function () { render(); } };
   nav.addEventListener('click', function (e) { var t = e.target.dataset.tab; if (t) { S.tab = t; render(); window.scrollTo(0, 0); } });
 
   var booting = false;
@@ -764,7 +772,7 @@
     if (S.user && S.user.id === user.id) return;
     S.user = user; booting = true;
     app.innerHTML = '<p>Loading…</p>';
-    loadAll().then(function () { S.form = formFromState(); booting = false; render(); }, function (e) { booting = false; fail(e); render(); });
+    loadAll().then(function () { return window.ProExtra && window.ProExtra.loadBureau ? window.ProExtra.loadBureau().catch(function () {}) : null; }).then(function () { S.form = formFromState(); booting = false; render(); }, function (e) { booting = false; fail(e); render(); });
   }
   sb.auth.onAuthStateChange(function (ev, session) {
     if (ev === 'PASSWORD_RECOVERY') S.recovery = true;
