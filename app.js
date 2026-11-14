@@ -6,7 +6,7 @@
   var S = { user: null, tab: 'plan', cards: [], profile: null, credit: null, apps: [], repay: null, consents: [], form: null, flash: null, isStaff: false, isAdmin: false, imp: null, impMsg: '' };
   var CONSENTS = [
     ['terms', 'I have read the terms of use (terms.html) and privacy summary (privacy.html), agree to them, and understand ProStack is a planning tool that does not apply for credit on my behalf or guarantee approval.'],
-    ['credit_data', 'I agree to store the credit ranges and counts I enter here (never my SSN, full report, or card numbers) so ProStack can build my plan.'],
+    ['credit_data', 'I agree to store the credit ranges and counts, personal and business details (name, date of birth, address, phone, income, employment, business information and EIN), only the last 4 digits of my SSN, and any business documents I upload, so ProStack can build my plan and prepare my application answers. ProStack never stores my full SSN, a full credit report, or card or bank account numbers, and I can delete my data any time from Account.'],
     ['estimates_notice', 'I understand odds, dates and card terms are estimates from public sources and may be wrong or out of date.'],
     ['affiliate_disclosure', 'I understand ProStack may earn referral fees from some issuers if I apply through a ProStack link. Any such link will be marked.']
   ];
@@ -510,7 +510,7 @@
       if (!window.confirm('Delete your credit profile, tracker and repayment plans? This cannot be undone.')) return;
       var uid = S.user.id;
       sb.storage.from('client-docs').list(uid).then(function (l) { var paths = (l.data || []).map(function (f) { return uid + '/' + f.name; }); return paths.length ? sb.storage.from('client-docs').remove(paths) : null; }).catch(function () {});
-      Promise.all(['applications', 'user_cards', 'repayment_plans', 'credit_profiles', 'client_checklist', 'credit_scores_log', 'disputes', 'client_documents'].map(function (t) { return sb.from(t).delete().eq('user_id', uid); })
+      Promise.all(['applications', 'user_cards', 'repayment_plans', 'credit_profiles', 'client_checklist', 'credit_scores_log', 'disputes', 'client_documents', 'personal_profiles', 'business_profiles'].map(function (t) { return sb.from(t).delete().eq('user_id', uid); })
         .concat([sb.from('profiles').update({ business_name: null, business_started_on: null, full_name: null, state: null, business_type: null }).eq('id', uid)]))
         .then(function (r) {
           var err = r.map(function (x) { return x.error; }).filter(Boolean)[0];
@@ -755,11 +755,11 @@
     nav.querySelector('[data-tab=staff]').hidden = !S.isStaff;
     Array.prototype.forEach.call(nav.querySelectorAll('button'), function (b) { b.setAttribute('aria-current', b.dataset.tab === S.tab ? 'page' : 'false'); });
     var X = window.ProExtra || {};
-    ['clients', 'cases'].forEach(function (t) { var b = nav.querySelector('[data-tab=' + t + ']'); if (b) b.hidden = !S.isStaff; });
+    ['clients', 'cases', 'messages'].forEach(function (t) { var b = nav.querySelector('[data-tab=' + t + ']'); if (b) b.hidden = !S.isStaff; });
     var fn = { plan: renderPlan, tracker: renderTracker, repay: renderRepay, account: renderAccount, staff: renderStaff }[S.tab] || X[S.tab] || renderPlan;
     fn();
     if (S.tab === 'account' && X.afterAccount) X.afterAccount();
-    if (['staff', 'clients', 'cases'].indexOf(S.tab) < 0 && X.banner) X.banner();
+    if (['staff', 'clients', 'cases', 'messages'].indexOf(S.tab) < 0 && X.banner) X.banner();
   }
   window.ProApp = { S: S, sb: sb, app: app, esc: esc, fmt: fmt, money: money, opts: opts, flash: flash, flashHtml: flashHtml, fail: fail, loadAll: loadAll, cardById: cardById, cardName: cardName,
     profileForEngine: profileForEngine, GOALS: GOALS, rerender: function () { render(); } };
@@ -772,7 +772,7 @@
     if (S.user && S.user.id === user.id) return;
     S.user = user; booting = true;
     app.innerHTML = '<p>Loading…</p>';
-    loadAll().then(function () { return window.ProExtra && window.ProExtra.loadBureau ? window.ProExtra.loadBureau().catch(function () {}) : null; }).then(function () { S.form = formFromState(); booting = false; render(); }, function (e) { booting = false; fail(e); render(); });
+    new Promise(function (res) { var Z = window.ProExtra; if (Z && Z.mfaGate) Z.mfaGate(res); else res(); }).then(function () { return loadAll(); }).then(function () { return window.ProExtra && window.ProExtra.loadBureau ? window.ProExtra.loadBureau().catch(function () {}) : null; }).then(function () { S.form = formFromState(); booting = false; render(); }, function (e) { booting = false; fail(e); render(); });
   }
   sb.auth.onAuthStateChange(function (ev, session) {
     if (ev === 'PASSWORD_RECOVERY') S.recovery = true;
